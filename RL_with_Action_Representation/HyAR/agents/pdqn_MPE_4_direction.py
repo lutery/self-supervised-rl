@@ -19,6 +19,17 @@ class QActor(nn.Module):
 
     def __init__(self, state_size, action_size, action_parameter_size, hidden_layers=(100,), action_input_layer=0,
                  output_layer_init_std=None, activation="relu", **kwargs):
+        '''
+        todo 这里应该是输出每一个离散动作的Q值
+
+        state_size: 环境观察的维度
+        action_size: 离散动作的维度
+        action_parameter_size: 连续动作的维度
+        hidden_layers: 隐藏层的维度
+        action_input_layer: 动作参数输入层的位置，0表示输入层，-1 todo
+        output_layer_init_std: todo
+        activateion: 激活函数
+        '''
         super(QActor, self).__init__()
         self.state_size = state_size
         self.action_size = action_size
@@ -27,17 +38,17 @@ class QActor(nn.Module):
 
         # create layers
         self.layers = nn.ModuleList()
-        inputSize = self.state_size + self.action_parameter_size
-        lastHiddenLayerSize = inputSize
+        inputSize = self.state_size + self.action_parameter_size # 看来也是是输入了环境观察和连续动作维度
+        lastHiddenLayerSize = inputSize # 存储最近一层的输入维度
         if hidden_layers is not None:
             nh = len(hidden_layers)
             self.layers.append(nn.Linear(inputSize, hidden_layers[0]))
             for i in range(1, nh):
                 self.layers.append(nn.Linear(hidden_layers[i - 1], hidden_layers[i]))
             lastHiddenLayerSize = hidden_layers[nh - 1]
-        self.layers.append(nn.Linear(lastHiddenLayerSize, self.action_size))  #输出为action_size维
+        self.layers.append(nn.Linear(lastHiddenLayerSize, self.action_size))  #输出为action_size维 输出离散动作维度维度？
 
-        # initialise layer weights
+        # initialise layer weights 初始化权重
         for i in range(0, len(self.layers) - 1):
             nn.init.kaiming_normal_(self.layers[i].weight, nonlinearity=activation)
             nn.init.zeros_(self.layers[i].bias)
@@ -48,10 +59,15 @@ class QActor(nn.Module):
         nn.init.zeros_(self.layers[-1].bias)
 
     def forward(self, state, action_parameters):
+        '''
+        state: 环境的观察
+        action_parameters: 预测的连续动作
+        '''
         # implement forward
         negative_slope = 0.01
 
         x = torch.cat((state, action_parameters), dim=1)  #将两个张量按列拼接
+        # 将观察和预测的连续动作拼接起来，然后输入网络预测离散动作的Q值
         num_layers = len(self.layers)
         for i in range(0, num_layers - 1):
             if self.activation == "relu":
@@ -65,9 +81,47 @@ class QActor(nn.Module):
 
 
 class ParamActor(nn.Module):
+    '''
+    混合动作空间的连续部分生成
+    ParamActor在本仓库的HyAR/PDQN系算法中承担“连续参数动作头”的角色：给定状态，产出归一化到[-1,1]的连续动作参数，并与离散动作选择头(QActor)协同完成混合动作空间的决策
+    Collecting workspace informationParamActor在本仓库的HyAR/PDQN系算法中承担“连续参数动作头”的角色：给定状态，产出归一化到[-1,1]的连续动作参数，并与离散动作选择头(QActor)协同完成混合动作空间的决策。
+
+    - 产出什么
+    - 输入: 状态向量（部分变体还会拼接离散动作或其嵌入）
+    - 输出: 连续动作参数向量 $a_c \in [-1,1]^{d}$，用于与离散动作索引组合成完整动作
+    - 代码见：
+        - `pdqn_MPE_4_direction.ParamActor`
+        - `pdqn_MPE_direction_catch.ParamActor`
+        - TD3/DDPG 变体同名类：如`pdqn_td3_MPE.ParamActor`、`pdqn.ParamActor`
+
+    - 如何协同决策
+    - ParamActor先给出参数动作 $a_c$，QActor再计算 $Q(s, a_c)$ 并为每个离散动作给出Q值，选取argmax离散动作。对应实现参考：
+        - `pdqn_MPE_direction_catch.QActor.forward`（将state与action_parameters拼接评估各离散动作Q）
+        - 这两者在Agent中一起实例化与优化，例如`pdqn_MPE_4_direction.PDQNAgent.__init__`
+
+    - 重要实现细节
+    - 多数实现含“直通层”(passthrough layer)：将状态线性映射并直接加到输出上以稳定训练，且权重冻结，见`pdqn_MPE_4_direction.ParamActor`与`pdqn_MPE_direction_catch.ParamActor`
+    - 输出范围与包裹器一致：环境侧用包装器把参数动作缩放到[-1,1]，参见`common.wrappers.QPAMDPScaledParameterisedActionWrapper`
+    - 训练时结合Q网络梯度对ParamActor做确定性策略梯度更新，必要时用“反向梯度”保持参数在边界内（参照各PDQN Agent中的`_invert_gradients`，如`pdqn_MPE_4_direction.PDQNAgent`）
+
+    - 与HyAR嵌入的关系
+    - 在HyAR的embedding训练流程中，ParamActor常作为预策略生成连续参数数据并填充经验池；而执行阶段也可能通过VAE解码得到参数动作（见`HyAR/embedding/ActionRepresentation_vae.py`的decode接口被上层调用）。总体目标一致：为离散动作提供其对应的连续参数，从而完成混合动作控制。
+    '''
 
     def __init__(self, state_size, action_size, action_parameter_size, hidden_layers, squashing_function=False,
                  output_layer_init_std=None, init_type="kaiming", activation="relu", init_std=None):
+        '''
+        state_size: 环境观察
+        action_size: 离散动作空间维度
+        action_parameter_size: 连续动作参数维度
+        hidden_layers: 隐藏层的层数
+        squashing_fcuntion: 用于将网络的输出值约束到指定的范围，但是由于作者无法正确的实现，所以暂时禁用，无用的参数
+        output_layer_init_std: todo
+        init_type: 初始化类型 用于初始化权重 
+        activation: 激活函数
+        init_std: todo
+
+        '''
         super(ParamActor, self).__init__()
 
         self.state_size = state_size
@@ -84,15 +138,20 @@ class ParamActor(nn.Module):
         inputSize = self.state_size
         lastHiddenLayerSize = inputSize
         if hidden_layers is not None:
+            # 构造隐藏层
             nh = len(hidden_layers)
             self.layers.append(nn.Linear(inputSize, hidden_layers[0]))
             for i in range(1, nh):
                 self.layers.append(nn.Linear(hidden_layers[i - 1], hidden_layers[i]))
             lastHiddenLayerSize = hidden_layers[nh - 1]
+        # 构造输出连续动作的预测层
         self.action_parameters_output_layer = nn.Linear(lastHiddenLayerSize, self.action_parameter_size)
+        # 对这个做特殊处理，不参与梯度计算
+        # 初始权重为0
         self.action_parameters_passthrough_layer = nn.Linear(self.state_size, self.action_parameter_size)
 
         # initialise layer weights
+        # 初始化权重
         for i in range(0, len(self.layers)):
             if init_type == "kaiming":
                 nn.init.kaiming_normal_(self.layers[i].weight, nonlinearity=activation)
@@ -116,22 +175,28 @@ class ParamActor(nn.Module):
         self.action_parameters_passthrough_layer.bias.requires_grad = False
 
     def forward(self, state):
+        '''
+        state: 输入观察
+        '''
         x = state
-        negative_slope = 0.01
+        negative_slope = 0.01 # 根据经验选择的一个leakRelu的参数
         num_hidden_layers = len(self.layers)
         for i in range(0, num_hidden_layers):
+            # 遍历每一层，根据不同的激活函数选择不同的参数
             if self.activation == "relu":
                 x = F.relu(self.layers[i](x))
             elif self.activation == "leaky_relu":
                 x = F.leaky_relu(self.layers[i](x), negative_slope)
             else:
                 raise ValueError("Unknown activation function "+str(self.activation))
-        action_params = self.action_parameters_output_layer(x)
+        action_params = self.action_parameters_output_layer(x) # 经过特征采集后输出的连续动作
 
         # print("action_params",action_params)
-        action_params += self.action_parameters_passthrough_layer(state)
+        # 这是一个残差连接的变体，类似ResNet中的skip connection。直通层确保即使主网络梯度消失，仍有稳定的梯度路径。
+        action_params += self.action_parameters_passthrough_layer(state) # 不考虑特征采集，直接传入state后，预测输出的值加入action_params
         # print("action_params",action_params)
         if self.squashing_function:
+            # 没有实现，主要目标就是要实现将参数约束到指定的范围内
             assert False  # scaling not implemented yet
             action_params = action_params.tanh()
             action_params = action_params * self.action_param_lim
@@ -238,15 +303,17 @@ class PDQNAgent(Agent):
         print(self.num_actions+self.action_parameter_size)
         print(observation_space[0][0])
         self.replay_memory = Memory(replay_memory_size, observation_space[0], (1+self.action_parameter_size,), next_actions=False)
+        # 构造了一个离散动作的Q值预测网络
         self.actor = actor_class(self.observation_space[0][0], self.num_actions, self.action_parameter_size, **actor_kwargs).to(device)
         self.actor_target = actor_class(self.observation_space[0][0], self.num_actions, self.action_parameter_size, **actor_kwargs).to(device)
-        hard_update_target_network(self.actor, self.actor_target)
-        self.actor_target.eval()
+        hard_update_target_network(self.actor, self.actor_target) # 同步权重
+        self.actor_target.eval() # 设置为验证模式，不存储梯度
 
+        # 构造一个连读动作的动作预测网络
         self.actor_param = actor_param_class(self.observation_space[0][0], self.num_actions, self.action_parameter_size, **actor_param_kwargs).to(device)
         self.actor_param_target = actor_param_class(self.observation_space[0][0], self.num_actions, self.action_parameter_size, **actor_param_kwargs).to(device)
         hard_update_target_network(self.actor_param, self.actor_param_target)
-        self.actor_param_target.eval()
+        self.actor_param_target.eval() # 设置为验证模式，不存储梯度
 
         self.loss_func = loss_func  # l1_smooth_loss performs better but original paper used MSE
 
@@ -325,12 +392,17 @@ class PDQNAgent(Agent):
             self.epsilon = self.epsilon_final
 
     def act(self, state):
+        '''
+        state: 环境观察
+        return: action: 离散动作索引；action_parameters: 该离散动作对应的连续动作参数（但是在当前的环境中，action_parameters=all_action_parameters）；all_action_parameters: 所有离散动作对应的连续动作参数
+        '''
         with torch.no_grad():
             state = torch.from_numpy(state).to(self.device)
 
             all_action_parameters = self.actor_param.forward(state)
 
             # Hausknecht and Stone [2016] use epsilon greedy actions with uniform random action-parameter exploration
+            # 是随机选择一个动作还是使用actor模型预测一个动作
             rnd = self.np_random.uniform()
             if rnd < 1.0:
                 action = self.np_random.choice(self.num_actions)
@@ -338,7 +410,7 @@ class PDQNAgent(Agent):
                     all_action_parameters = torch.from_numpy(np.random.uniform(self.action_parameter_min_numpy,
                                                               self.action_parameter_max_numpy))
             else:
-                #
+                # 使用模型预测，输入状态和连续动作，输出每个离散动作的Q值
                 Q_a = self.actor.forward(state.unsqueeze(0), all_action_parameters.unsqueeze(0))
                 Q_a = Q_a.detach().cpu().data.numpy()
                 action = np.argmax(Q_a)  #返回最大离散动作的索引
@@ -352,6 +424,7 @@ class PDQNAgent(Agent):
             #     all_action_parameters[0:4] += self.noise.sample()[0:4]
 
 
+            # 意思就是说all_action_parameters是所有离散动作对应的连续值，action_parameters是根据action离散动作选择的连续动作的值，比如有些离散动作是互斥的，所以存在需要将all_action_parameters中的值提取出指定的部分
             action_parameters = all_action_parameters
 
         return action, action_parameters, all_action_parameters

@@ -22,6 +22,16 @@ import math
 
 
 def pad_action(act, act_param):
+    '''
+    act： 预测的离散动作
+    act_param: 预测的离散动作对应的连续值
+    5表示动作模式ID，告诉环境这是"4个离散动作上下左右 + 4维连续动作参数"的混合动作模式。
+    动作向量的格式为：[动作类型ID, 连续参数, 离散动作one-hot编码]
+
+    位置0: 5 - 动作类型标识符
+    位置1-4: act_param - 4维连续动作参数
+    位置5-8: [1,0,0,0] 或类似 - 4个离散动作的one-hot编码
+    '''
     if act == 0:
         action = np.hstack(([5], act_param, [1], [0], [0], [0]))
     elif act == 1:
@@ -34,6 +44,9 @@ def pad_action(act, act_param):
 
 
 def pad_action_(act, act_param):
+    '''
+    对比pad_action，它不是一个简化后的pad，而是保留了每个离散动作对应的连续动作位置的
+    '''
     act_params = [0] * 4
     if act == 0:
         act_params[0] = act_param
@@ -181,15 +194,16 @@ def run(args):
                                        parameter_emb_dim=parameter_emb_dim,
                                        max_size=int(1e5))
     replay_buffer_embedding = utils.ReplayBuffer(state_dim, discrete_action_dim=1,
-                                                 parameter_action_dim=1,
-                                                 all_parameter_action_dim=parameter_action_dim,
+                                                 parameter_action_dim=1, # 设置对于选择的连续动作的值仅存储1维
+                                                 all_parameter_action_dim=parameter_action_dim, # 存储完整的全部离散动作对应的连续动作值
                                                  discrete_emb_dim=discrete_emb_dim,
                                                  parameter_emb_dim=parameter_emb_dim,
                                                  # max_size=int(1e7)
                                                  max_size=int(1e6)
                                                  )
 
-
+    
+    # todo 这个是在干嘛
     agent_pre = PDQNAgent(
         obs_shape_n, action_space=discrete_action_dim,
         parameter_action_dim=parameter_action_dim,
@@ -220,36 +234,43 @@ def run(args):
 
     # ------Use random strategies to collect experience------
 
-    max_steps = 30
-    total_reward = 0.
-    returns = []
+    max_steps = 30 # 每个游戏的最大步数
+    total_reward = 0. # 所有游戏回合的总奖励
+    returns = [] # 记录每轮游戏的总回报
     train_step = 0
-    success = []
+    success = [] # 记录每轮的游戏是否成功或者结束
 
+    # 开始训练 ，训练的轮数
     for i in range(5000):
 
-        state = obs_n
+        state = obs_n # 第一次的时候是reset的状态
         state = np.array(state, dtype=np.float32, copy=False)[0]
 
         act, act_param, all_action_parameters = agent_pre.act(state)
         action = pad_action(act, act_param)
 
-        episode_reward = 0.
-        agent_pre.start_episode()
+        episode_reward = 0. # 累积的奖励回报
+        agent_pre.start_episode() # 未实现，不清楚作用
         flag = 0
-        for j in range(max_steps):
+        for j in range(max_steps): # 
             train_step += 1
-            next_state, reward, done_n, _ = env.step(action)
+            next_state, reward, done_n, _ = env.step(action) # 执行游戏动作
             done = all(done_n)
             reward = reward[0]
             if reward > 4:
+                # 大于4表示任务完成，则标记为结束
                 flag = 1
                 done = True
             next_state = np.array(next_state, dtype=np.float32, copy=False)[0]
+            # 再次根据agent预测下一个状态的离散动作，离散动作对应的连续动作（但是在当前的环境中，action_parameters=all_action_parameters），所有离散动作的连续动作值
             next_act, next_act_param, next_all_action_parameters = agent_pre.act(next_state)
             # print("next_act, next_act_param",next_act, next_act_param)
-            next_action = pad_action(next_act, next_act_param)
-            state_next_state = next_state - state
+            next_action = pad_action(next_act, next_act_param) # 对离散动作和连续动作进行拼接
+            state_next_state = next_state - state # next_state - state 是在计算状态变化量（state transition delta），这在HyAR算法中有重要作用
+            # 根据不同的离散动作，提取对应的连续动作的值
+            # 这段代码是在将4维连续参数向量映射为单一标量值，用于存储到经验池中
+            # 为什么要这样做？经验池期望的parameter_action是1维标量，而不是4维向量
+            # todo 这里仅存储一个维度，那么后面训练的时候怎么处理？
             if act == 0:
                 act_param_ = act_param[0]
             elif act == 1:
@@ -261,11 +282,13 @@ def run(args):
             # else:
             #     act_param_ = np.zeros((1,))
 
+            # 记录到缓冲区中
             replay_buffer_embedding.add(state, act, act_param_, all_action_parameters, discrete_emb=None,
                                         parameter_emb=None,
                                         next_state=next_state,
                                         state_next_state=state_next_state,
                                         reward=reward, done=done)
+            # todo 下面好像都没必要？因为后续会直接被覆盖
             act, act_param, all_action_parameters = next_act, next_act_param, next_all_action_parameters
             action = next_action
             state = next_state
@@ -273,10 +296,12 @@ def run(args):
             episode_reward += reward
 
             if done or j == max_steps - 1:
+                # 游戏结束或者达到最大的步数，重制环境
                 obs_n = env.reset()
                 break
 
         if flag == 1:
+            # flag 1代表游戏成功的结束，则记录
             success.append(1)
         else:
             success.append(0)
@@ -285,10 +310,11 @@ def run(args):
         total_reward += episode_reward
 
         if i % 100 == 0:
+            # 输出最近100轮的奖励
             print('{0:5s} R:{1:.4f} r100:{2:.4f} success:{3:.4f}'.format(str(i), total_reward / (i + 1),
                                                                          np.array(returns[-100:]).mean(),
                                                                          np.array(success[-100:]).mean()))
-
+    # 创建存储目录
     save_dir = "result/simple_move_model/kl_0.5/1.0/0527"
     save_dir = os.path.join(save_dir, "{}".format(str(48)))
     print("save_dir", save_dir)
@@ -301,12 +327,13 @@ def run(args):
     # vae_load_model = True
     # vae_save_model = False
     if vae_load_model:
+        # 如果有预训练模型则加载
         print("load model")
         title = "vae" + "{}".format(str(4000))
         action_rep.load(title, save_dir)
         print("load discrete embedding", action_rep.discrete_embedding())
     print("pre VAE training phase started...")
-    recon_s_loss = []
+    recon_s_loss = [] # 记录训练的损失？
     c_rate, recon_s = vae_train(action_rep=action_rep, train_step=5000, replay_buffer=replay_buffer_embedding,
                                 batch_size=VAE_batch_size,
                                 save_dir=save_dir, vae_save_model=vae_save_model, embed_lr=1e-4)
@@ -503,6 +530,15 @@ def run(args):
 
 
 def vae_train(action_rep, train_step, replay_buffer, batch_size, save_dir, vae_save_model, embed_lr):
+    '''
+    action_rep: action representation model todo
+    train_step: 采样的总轮数，控制训练的轮数
+    replay_buffer: 缓冲区
+    batch_size: 训练batch
+    save_dir: 存储的目录
+    vae_save_model: 是否保存vae模型
+    embed_lr: embed学习率
+    '''
     initial_losses = []
     for counter in range(int(train_step) + 10):
         losses = []
