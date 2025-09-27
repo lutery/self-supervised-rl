@@ -246,11 +246,12 @@ def squash(x, eps = 1e-5):
 
 def pairwise_distances(x, y):
     '''
-    Input: x is a Nxd matrix
-           y is a Mxd matirx
+    Input: x is a Nxd matrix 输入的离散动作的嵌入向量
+           y is a Mxd matirx 输入的是vae embedding矩阵
     Output: dist is a NxM matrix where dist[i,j] is the square norm between x[i,:] and y[j,:]
     i.e. dist[i,j] = ||x[i,:]-y[j,:]||^2
-
+    
+    计算负欧氏距离作为相似度分数
     Advantage: Less memory requirement O(M*d + N*d + M*N) instead of O(N*M*d)
     Computationally more expensive? Maybe, Not sure.
     adapted from: https://discuss.pytorch.org/t/efficient-distance-matrix-computation/9065/2
@@ -263,7 +264,7 @@ def pairwise_distances(x, y):
     # print("x_norm",x_norm)
     # print("y_norm",y_norm)
     y_t = torch.transpose(y, 0, 1)  #交换一个tensor的两个维度
-    # a^2 + b^2 - 2ab
+    # a^2 + b^2 - 2ab= (a-b)^2 利用自动广播机制计算输入动作嵌入与所有可能动作嵌入的相似度
     dist = x_norm + y_norm - 2.0 * torch.mm(x, y_t)    #torch.mm 矩阵a和b矩阵相乘
     # dist[dist != dist] = 0 # replace nan values with 0
     # print("dist",dist)

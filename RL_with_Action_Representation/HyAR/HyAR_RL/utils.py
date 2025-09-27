@@ -39,8 +39,23 @@ class ReplayBuffer(object):
         discrtte_action: 离散动作
         parameter_action： 离散动作对应的连续动作的值
         all_parameter_action： 所有连续动作的值
-        discrete_emb： 离散动作的维度，有环境传入的是None
-        parameter_emb：todo
+        discrete_emb： 离散动作的维度，有环境传入的是None / 在训练时传入离散动作的嵌入向量 
+        parameter_emb：传入连续动作的嵌入向量
+        next_state： 执行动作后的下一个状态
+        state_next_state：新state和旧state之间的差值
+        reward：奖励
+        done：是否结束
+
+        '''
+
+        '''
+        在replay_buffer_embedding中
+        state: 环境的观察
+        discrtte_action: 离散动作
+        parameter_action： 离散动作对应的连续动作的值
+        all_parameter_action： 所有连续动作的值
+        discrete_emb： None
+        parameter_emb：None
         next_state： 执行动作后的下一个状态
         state_next_state：新state和旧state之间的差值
         reward：奖励

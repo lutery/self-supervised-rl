@@ -72,15 +72,16 @@ class VAE(nn.Module):
         z = F.relu(self.e1(z))
         z = F.relu(self.e2(z))
 
-        mean = self.mean(z) # 得到动作的均值
+        mean = self.mean(z) # 得到多模态（观察+离散动作+连续动作）下动作潜在空间的均值
         # Clamped for numerical stability
-        log_std = self.log_std(z).clamp(-4, 15) # 得到动作的方差log值
+        log_std = self.log_std(z).clamp(-4, 15) # 得到多模态（观察+离散动作+连续动作）下动作潜在空间的方差
 
         std = torch.exp(log_std) # 得到真实的方差
         z = mean + std * torch.randn_like(std) # 基于均值的采样
-        u, s = self.decode(state, z, action) # 解码得到重构的动作和状态
+        u, s = self.decode(state, z, action) # 解码得到重构的动作和状态（这里的观察是新旧状态之间的差值）
 
-        # 返回重建后的所有动作连续动作、观察、离散离散动作对应的潜在空间的均值和方差
+        # todo 确认这里的返回值是啥？
+        # 返回重建后的所有动作连续动作、观察（这里的观察是新旧状态之间的差值）、连续动作对应的潜在空间的均值和方差
         return u, s, mean, std
 
     def decode(self, state, z=None, action=None, clip=None, raw=False):
@@ -90,7 +91,7 @@ class VAE(nn.Module):
         action：离散动作的嵌入向量 
         raw： True仅返回预测的所有离散动作的连续值，False返回重建后的观察和预测的所有离散动作的连续值
 
-        return: 返回重建后的观察和预测的所有离散动作的连续值
+        return: 返回重建后的观察（这里的观察是新旧状态之间的差值）和预测的所有离散动作的连续值
         '''
         # When sampling from the VAE, the latent vector is clipped to [-0.5, 0.5]
         if z is None:
@@ -157,13 +158,14 @@ class Action_representation(NeuralNet):
         embed_lr：学习率
         '''
 
-        # 将离散动作转换潜入向量
+        # 将离散动作转换嵌入向量
         a1 = self.get_embedding(a1).to(self.device)
 
         s1 = s1.to(self.device)
         s2 = s2.to(self.device)
         a2 = a2.to(self.device)
-
+        
+        # 完成vae的训练，并返回：vae重建损失、观察变化损失、连续动作重建损失、KL约束散度损失 以上损失都只是标量值，估计只是为了记录
         vae_loss, recon_loss_d, recon_loss_c, KL_loss = self.train_step(s1, a1, a2, s2, sup_batch_size, embed_lr)
         return vae_loss, recon_loss_d, recon_loss_c, KL_loss
 
@@ -174,17 +176,22 @@ class Action_representation(NeuralNet):
         action_c 离散动作对应的连续动作的值
         next_state, 新旧状态之间的差值
         sup_batch_size：采样的样本数
+
+        return: vae重建损失、观察变化损失、连续动作重建损失、KL约束散度损失
         '''
+        # recon_s: 重构新旧状态之间的差值观察
         recon_c, recon_s, mean, std = self.vae(state, action_d, action_c)
 
-        recon_loss_s = F.mse_loss(recon_s, next_state, size_average=True)
-        recon_loss_c = F.mse_loss(recon_c, action_c, size_average=True)
+        #  size_average=True：计算所有元素的MSE后，再除以元素总数，返回的是平均损失值
+        recon_loss_s = F.mse_loss(recon_s, next_state, size_average=True) # 计算重建观察差值之间的损失
+        recon_loss_c = F.mse_loss(recon_c, action_c, size_average=True) # 计算重建离散动作对应的连续动作值之间的损失
 
+        # 这个最大的作用感觉是即保证了网络接近重建的能力又保证了一定的随机性
         KL_loss = -0.5 * (1 + torch.log(std.pow(2)) - mean.pow(2) - std.pow(2)).mean()
 
         # vae_loss = 0.25 * recon_loss_s + recon_loss_c + 0.5 * KL_loss
         # vae_loss = 0.25 * recon_loss_s + 2.0 * recon_loss_c + 0.5 * KL_loss  #best
-        vae_loss = recon_loss_s + 2.0 * recon_loss_c + 0.5 * KL_loss
+        vae_loss = recon_loss_s + 2.0 * recon_loss_c + 0.5 * KL_loss # 计算总损失，其中的比例通过注释可知是测试出来的
         # print("vae loss",vae_loss)
         # return vae_loss, 0.25 * recon_loss_s, recon_loss_c, 0.5 * KL_loss
         # return vae_loss, 0.25 * recon_loss_s, 2.0 * recon_loss_c, 0.5 * KL_loss #best
@@ -198,6 +205,8 @@ class Action_representation(NeuralNet):
         s2, 新旧状态之间的差值
         sup_batch_size：采样的样本数
         embed_lr：学习率
+
+        return vae重建损失、观察变化损失、连续动作重建损失、KL约束散度损失 以上损失都只是标量值，估计只是为了记录
         '''
         state = s1
         action_d = a1
@@ -206,8 +215,8 @@ class Action_representation(NeuralNet):
         vae_loss, recon_loss_s, recon_loss_c, KL_loss = self.loss(state, action_d, action_c, next_state,
                                                                   sup_batch_size)
 
-        # 更新VAE
-        self.vae_optimizer = torch.optim.Adam(self.vae.parameters(), lr=embed_lr)
+        # 更新VAE 
+        self.vae_optimizer = torch.optim.Adam(self.vae.parameters(), lr=embed_lr) # todo 这里存在问题，如果仅仅只是为了手动调整学习率，可以有更好的做法，参考md
         self.vae_optimizer.zero_grad()
         vae_loss.backward()
         self.vae_optimizer.step()
@@ -215,11 +224,18 @@ class Action_representation(NeuralNet):
         return vae_loss.cpu().data.numpy(), recon_loss_s.cpu().data.numpy(), recon_loss_c.cpu().data.numpy(), KL_loss.cpu().data.numpy()
 
     def select_parameter_action(self, state, z, action):
+        '''
+        state: 环境观察
+        z: 预测连续动作并转换为真实动作范围的连续动作嵌入向量
+        action：预测离散动作的嵌入向量
+
+        return 返回预测的连续动作的连续动作值
+        '''
         with torch.no_grad():
             state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
             z = torch.FloatTensor(z.reshape(1, -1)).to(self.device)
             action = torch.FloatTensor(action.reshape(1, -1)).to(self.device)
-            action_c, state = self.vae.decode(state, z, action)
+            action_c, state = self.vae.decode(state, z, action) # 返回重建后的观察（这里的观察是新旧状态之间的差值）和预测的所有离散动作的连续值
         return action_c.cpu().data.numpy().flatten()
 
     # def select_delta_state(self, state, z, action):
@@ -230,6 +246,13 @@ class Action_representation(NeuralNet):
     #         action_c, state = self.vae.decode(state, z, action)
     #     return state.cpu().data.numpy().flatten()
     def select_delta_state(self, state, z, action):
+        '''
+        state: 环境观察
+        z：连续动作的嵌入表示
+        action： 离散动作的嵌入表示
+
+        return: 重建后的新旧观察差值
+        '''
         with torch.no_grad():
             action_c, state = self.vae.decode(state, z, action)
         return state.cpu().data.numpy()
@@ -237,6 +260,8 @@ class Action_representation(NeuralNet):
     def get_embedding(self, action):
         '''
         action：执行的离散动作
+
+        return: 将离散动作转换为一个嵌入向量，类似LSTM的嵌入模型
         '''
         # Get the corresponding target embedding
         action_emb = self.vae.embeddings[action] # 看起来是从VAE的embeddings随机矩阵中选择一个和离散动作对应的随机连续动作值
@@ -244,19 +269,31 @@ class Action_representation(NeuralNet):
         return action_emb
 
     def get_match_scores(self, action):
+        '''
+        action: 输入的是离散动作的嵌入向量
+
+        return: 输入动作嵌入与所有可能动作嵌入的相似度
+        '''
         # compute similarity probability based on L2 norm
         embeddings = self.vae.embeddings
         embeddings = torch.tanh(embeddings)
         action = action.to(self.device)
-        # compute similarity probability based on L2 norm
+        # compute similarity probability based on L2 norm 输入动作嵌入与所有可能动作嵌入的相似度
         similarity = - pairwise_distances(action, embeddings)  # Negate euclidean to convert diff into similarity score
         return similarity
 
         # 获得最优动作，输出于embedding最相近的action 作为最优动作.
 
     def select_discrete_action(self, action):
+        '''
+        将策略网络输出的动作嵌入转换为具体的离散动作索引
+        action: 输入的是离散动作的嵌入向量
+
+        return: 离散动作的索引  也就是选择的离散动作
+        '''
+    
         similarity = self.get_match_scores(action)
-        val, pos = torch.max(similarity, dim=1)
+        val, pos = torch.max(similarity, dim=1) # 选择相似度最大的动作位置索引
         # print("pos",pos,len(pos))
         if len(pos) == 1:
             return pos.cpu().item()  # data.numpy()[0]
@@ -273,53 +310,83 @@ class Action_representation(NeuralNet):
         # self.vae.embeddings = torch.load('%s/%s_embeddings.pth' % (directory, filename), map_location=self.device)
 
     def get_c_rate(self, s1, a1, a2, s2, batch_size=100, range_rate=5):
-        a1 = self.get_embedding(a1).to(self.device)
+        '''
+        s1: 环境观察
+        a1: 离散动作
+        a2: 离散动作对应的连续动作的值
+        s2: 新旧动作之间的差值
+        batch_size: 采样的尺寸
+        range_rate： todo
+
+        return 离散动作潜在空间的边界范围、重建观察差值损失
+        '''
+        a1 = self.get_embedding(a1).to(self.device) # 将离散动作转换为嵌入向量
         s1 = s1.to(self.device)
         s2 = s2.to(self.device)
         a2 = a2.to(self.device)
-        recon_c, recon_s, mean, std = self.vae(s1, a1, a2)
+        recon_c, recon_s, mean, std = self.vae(s1, a1, a2) # 利用vae计算预测的重建观察差值、重建连续动作、重建离散动作均值和方差
         # print("recon_s",recon_s.shape)
-        z = mean + std * torch.randn_like(std)
+        # std * torch.randn_like(std)：实现VAE的重参数化技巧(Reparameterization Trick)
+        '''
+        mean = self.mean(z) # 得到动作的均值
+        log_std = self.log_std(z).clamp(-4, 15) # 得到动作的方差log值
+        std = torch.exp(log_std) # 得到真实的方差
+        z = mean + std * torch.randn_like(std) # 重参数化采样
+
+        保证梯度可以传播又可以保证随机性，如果直接torch.normal(mean, std)计算采样得到的动作是无法传播的
+        '''
+        z = mean + std * torch.randn_like(std) # 采样离散动作
         z = z.cpu().data.numpy()
+        # 返回离散动作的潜在空间的边界值范围
         c_rate = self.z_range(z, batch_size, range_rate)
         # print("s2",s2.shape)
 
+        # 计算重建观察差值损失
         recon_s_loss = F.mse_loss(recon_s, s2, size_average=True)
 
         # recon_s = abs(np.mean(recon_s.cpu().data.numpy()))
         return c_rate, recon_s_loss.detach().cpu().numpy()
 
     def z_range(self, z, batch_size=100, range_rate=5):
+        '''
+        函数的作用是计算潜在空间采样值的动态边界范围
+        z: 采样得到的离散动作
+        batch_size: 训练batch
+        range_rate：todo
+        '''
 
+        # todo
         self.z1, self.z2, self.z3, self.z4, self.z5, self.z6, self.z7, self.z8, self.z9,\
         self.z10,self.z11,self.z12,self.z13,self.z14,self.z15,self.z16 = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
-        border = int(range_rate * (batch_size / 100))
+        border = int(range_rate * (batch_size / 100)) # # 计算边界索引 todo 这个值可能是需要根据实际进行调整
 
         # print("border",border)
         if len(z[0]) == 16:
+            # # 对每个潜在维度分别处理
             for i in range(len(z)):
-                self.z1.append(z[i][0])
-                self.z2.append(z[i][1])
-                self.z3.append(z[i][2])
-                self.z4.append(z[i][3])
-                self.z5.append(z[i][4])
-                self.z6.append(z[i][5])
-                self.z7.append(z[i][6])
-                self.z8.append(z[i][7])
-                self.z9.append(z[i][8])
-                self.z10.append(z[i][9])
-                self.z11.append(z[i][10])
-                self.z12.append(z[i][11])
-                self.z13.append(z[i][12])
-                self.z14.append(z[i][13])
-                self.z15.append(z[i][14])
-                self.z16.append(z[i][15])
+                self.z1.append(z[i][0]) # # 收集第1维的所有值
+                self.z2.append(z[i][1]) # 收集第2维的所有值
+                self.z3.append(z[i][2]) # 收集第3维的所有值
+                self.z4.append(z[i][3]) # 收集第4维的所有值
+                self.z5.append(z[i][4]) # 收集第5维的所有值
+                self.z6.append(z[i][5]) # 收集第6维的所有值
+                self.z7.append(z[i][6]) # 收集第7维的所有值
+                self.z8.append(z[i][7]) # 收集第8维的所有值
+                self.z9.append(z[i][8]) # 收集第9维的所有值
+                self.z10.append(z[i][9]) # 收集第10维的所有值
+                self.z11.append(z[i][10]) # 收集第11维的所有值
+                self.z12.append(z[i][11]) # 收集第12维的所有值
+                self.z13.append(z[i][12]) # 收集第13维的所有值
+                self.z14.append(z[i][13]) # 收集第14维的所有值
+                self.z15.append(z[i][14]) # 收集第15维的所有值
+                self.z16.append(z[i][15]) # 收集第16维的所有值
 
         if len(z[0]) == 16:
+            # 对收集后的维度所有值进行排序
             self.z1.sort(), self.z2.sort(), self.z3.sort(), self.z4.sort(), self.z5.sort(), self.z6.sort(), self.z7.sort(), self.z8.sort(), \
             self.z9.sort(), self.z10.sort(), self.z11.sort(), self.z12.sort(),self.z13.sort(), self.z14.sort(), self.z15.sort(), self.z16.sort()
-            c_rate_1_up = self.z1[-border - 1]
-            c_rate_1_down = self.z1[border]
+            c_rate_1_up = self.z1[-border - 1] # # 上边界：排序后的第95%分位
+            c_rate_1_down = self.z1[border] #  # 下边界：排序后的第5%分位
             c_rate_2_up = self.z2[-border - 1]
             c_rate_2_down = self.z2[border]
             c_rate_3_up = self.z3[-border - 1]
@@ -370,6 +437,7 @@ class Action_representation(NeuralNet):
             c_rate_15.append(c_rate_15_up), c_rate_15.append(c_rate_15_down)
             c_rate_16.append(c_rate_16_up), c_rate_16.append(c_rate_16_down)
 
+            # 返回每个维度的范围（上边界和下边界）
             return c_rate_1, c_rate_2, c_rate_3, c_rate_4, c_rate_5, c_rate_6, c_rate_7, c_rate_8,\
                    c_rate_9, c_rate_10, c_rate_11, c_rate_12,c_rate_13, c_rate_14, c_rate_15, c_rate_16
 
