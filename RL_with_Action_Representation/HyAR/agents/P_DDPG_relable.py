@@ -15,6 +15,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class Actor(nn.Module):
     def __init__(self, state_dim, discrete_action_dim, parameter_action_dim, max_action):
+        '''
+        state_dim: 环境观察的维度
+        discrete_action_dim： 离散动作的维度
+        parameter_action_dim： 连续动作的维度
+        max_action： 动作的最大值
+        '''
         super(Actor, self).__init__()
 
         self.l1 = nn.Linear(state_dim, 256)
@@ -34,8 +40,14 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
     def __init__(self, state_dim, discrete_action_dim, parameter_action_dim):
+        '''
+        state_dim: 环境观察的维度
+        discrete_action_dim： 离散动作的维度
+        parameter_action_dim： 连续动作的维度
+        '''
         super(Critic, self).__init__()
 
+        # 输入环境观察、离散动作、连续动作返回Q值
         self.l1 = nn.Linear(state_dim + discrete_action_dim + parameter_action_dim, 256)
         self.l2 = nn.Linear(256, 256)
         self.l3 = nn.Linear(256, 1)
@@ -59,15 +71,29 @@ class DDPG(object):
 				 tau_actor=0.005,
 				 tau_critic=0.005,
                  ):
+        '''
+        state_dim: 环境观察的维度
+        discrete_action_dim： 离散动作的维度
+        parameter_action_dim： 连续动作的维度
+        max_action： 动作的最大值
+        discount： 折扣因子
+        tau： 软更新的参数
+        actor_lr： actor网络的学习率
+        critic_lr： critic网络的学习率
+        tau_actor: todo
+        tau_critic: todo
+        '''
         print("actor_lr,critic_lr,tau_actor,tau_critic", actor_lr,critic_lr,tau_actor,tau_critic)
 
         self.discrete_action_dim = discrete_action_dim
         self.parameter_action_dim = parameter_action_dim
 
+        # 离散动作嵌入动作的最大值、最小值和动作嵌入范围
         self.action_max = torch.from_numpy(np.ones((self.discrete_action_dim,))).float().to(device)
         self.action_min = -self.action_max.detach()
         self.action_range = (self.action_max - self.action_min).detach()
 
+        # 连续动作嵌入动作的最大值、最小值和动作嵌入范围
         self.action_parameter_max = torch.from_numpy(np.ones((self.parameter_action_dim,))).float().to(device)
         self.action_parameter_min = -self.action_parameter_max.detach()
         # print(" self.action_parameter_max_numpy", self.action_parameter_max)
@@ -90,50 +116,102 @@ class DDPG(object):
 
         self.max_action = max_action
 
-        self.total_it = 0
-        self.noise_clip = 0.5
+        self.total_it = 0 # todo
+        self.noise_clip = 0.5 # todo
 
     def select_action(self, state):
+        '''
+        state: 环境的观察
+        返回：离散动作嵌入、连续动作嵌入
+        作用：根据环境的观察选择动作嵌入
+        '''
         state = torch.FloatTensor(state.reshape(1, -1)).to(device)
         all_discrete_action, all_parameter_action = self.actor(state)
         return all_discrete_action.cpu().data.numpy().flatten(), all_parameter_action.cpu().data.numpy().flatten()
 
     def train(self, replay_buffer, action_rep, c_rate, recon_s_rate, batch_size=256):
-        recon_s_rate = recon_s_rate * 5.0
+        '''
+        replay_buffer： 经验回放缓冲区
+        action_rep： 动作表示模型
+        c_rate： 连续动作嵌入空间的边界范围
+        recon_s_rate： 重建观察差值损失合理范围
+        batch_size： 批量大小
+        返回：离散动作重标记率、连续动作重标记率
+        '''
+        recon_s_rate = recon_s_rate * 5.0 # 这里是为了这个系数的作用是放大质量判断的阈值，使得更多的参数嵌入被认为是"合格"的
         self.total_it += 1
-        # Sample replay buffer
+        # Sample replay buffer 采样 离散 不连续
+        # discrete_emb：对应真实离散动作的嵌入向量表示
+        # state_next_state：表示新旧状态误差
         state, discrete_action, parameter_action, all_parameter_action, discrete_emb, parameter_emb, next_state, state_next_state, reward, not_done = replay_buffer.sample(
             batch_size)
-
+        # print("discrete_emb----------",discrete_emb)
         with torch.no_grad():
+            # 获取离散动作的嵌入表示
             discrete_emb_ = action_rep.get_embedding(discrete_action.reshape(1, -1).squeeze().long()).to(device)
-            # discrete relable need noise
+            # discrete relable need noise 计算离散动作的噪音量 因为之前约束了符合标准正态分布，可以这么采样噪音
             noise_discrete = (
                     torch.randn_like(discrete_emb_) * 0.1
             ).clamp(-self.noise_clip, self.noise_clip)
-            discrete_emb_table = discrete_emb_.clamp(-self.max_action, self.max_action)
-            discrete_emb_table_noise = (discrete_emb_ + noise_discrete).clamp(-self.max_action, self.max_action)
+            discrete_emb_table = discrete_emb_.clamp(-self.max_action, self.max_action) # 离散动作的嵌入表示，规范了范围
+            discrete_emb_table_noise = (discrete_emb_ + noise_discrete).clamp(-self.max_action, self.max_action) # 增加了噪音的离散动作的嵌入表示
 
-            discrete_action_old = action_rep.select_discrete_action(discrete_emb).reshape(-1, 1)
+            discrete_action_old = action_rep.select_discrete_action(discrete_emb).reshape(-1, 1) # 将嵌入动作向量转换为离散动作的值
             d_new = discrete_action.cpu().numpy()
             d_old = discrete_action_old
-            d_bing = (d_new == d_old) * 1
+            # 这里d_new和d_old的命名存在混淆，d_new是经验回放缓冲区中存储的真实离散动作，d_old是根据嵌入向量重新计算得到的离散动作
+            # 可以理解为d_new是旧的，d_old是新的，所以最好重新命名比较好
+            d_bing = (d_new == d_old) * 1# 这里是在计算什么？？计算新旧值之间是否匹配的bool矩阵
             # discrete_relable_rate
-            discrete_relable_rate = sum(d_bing.reshape(1, -1)[0]) / batch_size
+            discrete_relable_rate = sum(d_bing.reshape(1, -1)[0]) / batch_size # 计算新旧嵌入动作之间总共有多少匹配的动作
             d_bing = torch.FloatTensor(d_bing).float().to(device)
-            discrete_emb_ = d_bing * discrete_emb + (1.0 - d_bing) * discrete_emb_table_noise
+            '''
+            用于选择性地替换经验池中的动作嵌入
 
+            # 伪代码表示
+            for i in range(batch_size):
+                if d_bing[i] == 1:  # 动作匹配
+                    discrete_emb_[i] = discrete_emb[i]  # 保持原始嵌入
+                else:  # d_bing[i] == 0，动作不匹配
+                    discrete_emb_[i] = discrete_emb_table_noise[i]  # 使用重标记的嵌入，表示嵌入质量差，这个是重新根据实际离散动作计算得到含有噪音的离散动作嵌入
+
+            todo 这就有一个问题，实际的动作嵌入也是根据网络预测的，为啥会出现偏差？
+            难道是根据训练不断的得到一个更加准确的动作嵌入
+            '''
+            discrete_emb_ = d_bing * discrete_emb + (1.0 - d_bing) * discrete_emb_table_noise
+            # print("discrete_emb_final",discrete_emb_)
+
+            # 预测新旧观察的差值
             predict_delta_state = action_rep.select_delta_state(state, parameter_emb, discrete_emb_table)
-            delta_state = (np.square(predict_delta_state - state_next_state.cpu().numpy())).mean(axis=1).reshape(-1, 1)
-            s_bing = (abs(delta_state) < recon_s_rate) * 1
-            parameter_relable_rate = sum(s_bing.reshape(1, -1)[0]) / batch_size
-            s_bing = torch.FloatTensor(s_bing).float().to(device)
+            
+            # print("predict_delta_state",predict_delta_state)
+            # print("state_next_state",state_next_state.cpu().numpy())
+            delta_state = (np.square(predict_delta_state - state_next_state.cpu().numpy())).mean(axis=1).reshape(-1, 1) # 计算预测的新旧状态误差和实际的新旧状态误差之间的差值
+            # delta_state=predict_delta_state-state_next_state.cpu().numpy()
+            # delta_state=np.mean(delta_state, axis=1).reshape(-1, 1)
+            s_bing = (abs(delta_state) < recon_s_rate) * 1 # 计算预测误差是否在允许的范围内，又是一个bool矩阵
+            parameter_relable_rate = sum(s_bing.reshape(1, -1)[0]) / batch_size # 计算在允许范围内的比例，也就是计算预测比较准确的比例
+            s_bing = torch.FloatTensor(s_bing).float().to(device)# 转换为tensor
             # print("s_bing",s_bing)
 
+            # 将真实的样本数据通过vae编码重建得到动作和观察的嵌入表示，以及连续动作和观察的潜在空间均值和方差
             recon_c, recon_s, mean, std = action_rep.vae(state, discrete_emb_table, parameter_action)
-            parameter_emb_ = mean + std * torch.randn_like(std)
+            parameter_emb_ = mean + std * torch.randn_like(std) # 重参数化采样潜在空间的值
             for i in range(len(parameter_emb_[0])):
+                # todo 后续修改映射的范围，减少这种映射操作
+                # 这个循环是在逐维度处理参数嵌入，将每个维度的值从VAE的分布范围映射回标准化范围
+                # 这里对应于在采样时做的转换
+                '''
+                这是范围标准化的逆变换：
+                    输入: VAE分布范围内的参数嵌入值
+                    输出: 标准化范围[-1, 1]内的参数嵌入值
+                '''
                 parameter_emb_[:, i:i + 1] = self.true_parameter_emb(parameter_emb_[:, i:i + 1], c_rate, i)
+            # print("parameter_emb",parameter_emb)
+            # print("parameter_emb_",parameter_emb_)
+
+            # 根据s_bing选择性地替换经验池中的连续动作嵌入，保证传入到训练中的连续动作嵌入是比较准确的
+            # 同理由于模型的不断迭代，潜在空间采样的连续动作嵌入会越来越准确，所以需要确保经验池中的连续动作嵌入也是比较准确的，对于不准确的就用重新编码得到的
             parameter_emb_ = s_bing * parameter_emb + (1 - s_bing) * parameter_emb_
             # print("parameter_emb_final",parameter_emb_)
 
@@ -164,10 +242,12 @@ class DDPG(object):
         # inverting_gradients = False
         # Compute actor losse
         if inverting_gradients:
+            # 这里计算存在重复，看md文档
             with torch.no_grad():
                 next_discrete_action, next_parameter_action = self.actor(state)
                 action_params = torch.cat((next_discrete_action, next_parameter_action), dim=1)
             action_params.requires_grad = True
+            # 这个损失就是经典的求最大Q值的损失
             actor_loss = self.critic(state, action_params[:, :self.discrete_action_dim],
                                      action_params[:, self.discrete_action_dim:]).mean()
         else:
@@ -183,23 +263,29 @@ class DDPG(object):
             delta_a = deepcopy(action_params.grad.data)
             # 2 - apply inverting gradients and combine with gradients from actor
             actions, action_params = self.actor(Variable(state))
+            # # 对连续动作参数应用梯度反转
             action_params = torch.cat((actions, action_params), dim=1)
+            # 根据预测的动作值和边界值调整梯度
             delta_a[:, self.discrete_action_dim:] = self._invert_gradients(
                 delta_a[:, self.discrete_action_dim:].cpu(),
                 action_params[:, self.discrete_action_dim:].cpu(),
                 grad_type="action_parameters", inplace=True)
+            # 对离散动作嵌入应用梯度反转
             delta_a[:, :self.discrete_action_dim] = self._invert_gradients(
                 delta_a[:, :self.discrete_action_dim].cpu(),
                 action_params[:, :self.discrete_action_dim].cpu(),
                 grad_type="actions", inplace=True)
+            # 这段代码的作用是将调整后的梯度应用到Actor网络参数上，详细看md文档
             out = -torch.mul(delta_a, action_params)
             self.actor.zero_grad()
             out.backward(torch.ones(out.shape).to(device))
             torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.)
 
-        self.actor_optimizer.step()
+            # torch.nn.utils.clip_grad_norm_(self.actor.parameters(), 1.)
+            self.actor_optimizer.step()
 
         # Update the frozen target models
+        # 同步更新目标网络
         for param, target_param in zip(self.critic.parameters(), self.critic_target.parameters()):
             target_param.data.copy_(self.tau_critic * param.data + (1 - self.tau_critic) * target_param.data)
 
@@ -242,10 +328,19 @@ class DDPG(object):
         self.actor_target = copy.deepcopy(self.actor)
 
     def _invert_gradients(self, grad, vals, grad_type, inplace=True):
+        '''
+        grad: 要调整的梯度张量
+        vals: 与梯度对应的动作值张量
+        grad_type: 指定梯度类型，是针对离散动作嵌入("actions")还是连续动作参数("action_parameters")
+        inplace: 是否在原地修改梯度
+
+        是一个梯度调整函数，用于处理有界动作空间中的梯度优化问题。它根据当前动作值在边界中的位置，智能地调整梯度强度，避免边界处的梯度消失问题
+        '''
+
         if grad_type == "actions":
-            max_p = self.action_max.cpu()
-            min_p = self.action_min.cpu()
-            rnge = self.action_range.cpu()
+            max_p = self.action_max.cpu() # 上边界 [1, 1, 1, ...]
+            min_p = self.action_min.cpu()  # 下边界 [-1, -1, -1, ...]
+            rnge = self.action_range.cpu() # 范围 [2, 2, 2, ...]
         elif grad_type == "action_parameters":
             max_p = self.action_parameter_max.cpu()
             min_p = self.action_parameter_min.cpu()
@@ -258,11 +353,26 @@ class DDPG(object):
         if not inplace:
             grad = grad.clone()
         with torch.no_grad():
-            for n in range(grad.shape[0]):
+            for n in range(grad.shape[0]): # 遍历batch中的每个样本
                 # index = grad < 0  # actually > but Adam minimises, so reversed (could also double negate the grad)
+                '''
+                原理：
+                正梯度调整公式：
+                adjusted_grad_positive = original_grad * (max_value - current_value) / range
+                负梯度调整公式：
+                adjusted_grad_negative = original_grad * (current_value - min_value) / range
+
+                边界感知的梯度缩放
+                接近边界时：梯度被大幅缩小，避免越界
+                远离边界时：梯度保持较大，确保有效学习
+                中间位置时：梯度适度调整，平衡探索与约束
+                '''
                 index = grad[n] > 0
+                # # 对正梯度进行缩放
                 grad[n][index] *= (index.float() * (max_p - vals[n]) / rnge)[index]
+                # # 对负梯度进行缩放
                 grad[n][~index] *= ((~index).float() * (vals[n] - min_p) / rnge)[~index]
+
         return grad
 
     def count_boundary(self, c_rate):
