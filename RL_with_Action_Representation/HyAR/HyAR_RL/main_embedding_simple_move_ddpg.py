@@ -183,8 +183,8 @@ def run(args):
                                        parameter_emb_dim=parameter_emb_dim,
                                        max_size=int(1e6))
     replay_buffer_embedding = utils.ReplayBuffer(state_dim, discrete_action_dim=1,
-                                                 parameter_action_dim=1,
-                                                 all_parameter_action_dim=parameter_action_dim,
+                                                 parameter_action_dim=1, # 设置对于选择的连续动作的值仅存储1维
+                                                 all_parameter_action_dim=parameter_action_dim, # 存储完整的全部离散动作对应的连续动作值
                                                  discrete_emb_dim=discrete_emb_dim,
                                                  parameter_emb_dim=parameter_emb_dim,
                                                  # max_size=int(1e7)

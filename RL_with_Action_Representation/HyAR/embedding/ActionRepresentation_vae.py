@@ -125,6 +125,14 @@ class Action_representation(NeuralNet):
                  reduce_parameter_action_dim=2,
                  embed_lr=1e-4,
                  ):
+        '''
+        state_dim: 环境观察的维度
+        action_dim: 离散动作的维度
+        parameter_action_dim：离散动作对应的连续动作的维度（而不是全部连续动作的维度）
+        reduced_action_dim：离散动作对应的潜在空间的维度
+        reduce_parameter_action_dim：动作潜在空间的维度
+        embed_lr：学习率
+        '''
         super(Action_representation, self).__init__()
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         # self.device = torch.device("cpu")
