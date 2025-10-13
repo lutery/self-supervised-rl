@@ -74,15 +74,28 @@ def run(args):
     if args.save_model and not os.path.exists("./models"):
         os.makedirs("./models")
     if args.env == "Platform-v0":
-        env = gym.make(args.env)
-        env = ScaledStateWrapper(env)
-        initial_params_ = [3., 10., 400.]
+        # 这里对Platform-v0环境进行了一些特殊处理
+        env = gym.make(args.env) # 看来是直接注册到gym里的，所以可以直接make
+        env = ScaledStateWrapper(env) # 主要构建一个-1~1的观察空间
+        '''
+        这是为每个动作设置的初始参数值:
+        这里应该是将初始动作值缩放到-1~1之间
+
+        RUN动作: 3.0 (范围在0-30之间)
+        HOP动作: 10.0 (范围在0-720之间)
+        LEAP动作: 400.0 (范围在0-430之间)
+        '''
+        initial_params_ = [3., 10., 400.] # todo 这个值是用来做啥的？
+        # 这段代码的作用是将Platform环境的初始动作参数从原始范围缩放到[-1, 1]区间
+        # 公式：scaled_value = 2 * (value - min) / (max - min) - 1
         for a in range(env.action_space.spaces[0].n):
             initial_params_[a] = 2. * (initial_params_[a] - env.action_space.spaces[1].spaces[a].low) / (
                     env.action_space.spaces[1].spaces[a].high - env.action_space.spaces[1].spaces[a].low) - 1.
+        # 定义了一个初始权重矩阵，形状为(动作数量, 状态维度)，并初始化为零 这是什么？
+        # 不用看了，这个值后面没用，代码混乱
         initial_weights = np.zeros((env.action_space.spaces[0].n, env.observation_space.spaces[0].shape[0]))
-        env = PlatformFlattenedActionWrapper(env)
-        env = ScaledParameterisedActionWrapper(env)
+        env = PlatformFlattenedActionWrapper(env) # 展平
+        env = ScaledParameterisedActionWrapper(env) # 将动作空间缩放到-1~1
 
     # Set seeds
     env.seed(args.seed)
@@ -502,4 +515,5 @@ if __name__ == "__main__":
     args = parser.parse_args()
     for i in range(0, 5):
         args.seed = i
+        # 运行5次
         run(args)

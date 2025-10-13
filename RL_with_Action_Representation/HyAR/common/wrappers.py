@@ -7,6 +7,7 @@ from gym.spaces import Tuple, Box
 class ScaledStateWrapper(gym.ObservationWrapper):
     """
     Scales the observation space to [-1,1]
+    看起来是要将观察缩放到[-1,1]范围内
     """
 
     def __init__(self, env):
@@ -18,11 +19,14 @@ class ScaledStateWrapper(gym.ObservationWrapper):
         print(type(obs))
         print(obs)
         if isinstance(obs, gym.spaces.Box):
-            self.low = env.observation_space.low
-            self.high = env.observation_space.high
+            # 根据不同的观察空间类型，提取不同的低高值
+            self.low = env.observation_space.low # 观察空间的低值
+            self.high = env.observation_space.high # 观察空间的高值
             self.observation_space = gym.spaces.Box(low=-np.ones(self.low.shape), high=np.ones(self.high.shape),
-                                                    dtype=np.float32)
+                                                    dtype=np.float32) # 创建一个新的观察空间，范围为[-1,1]
         elif isinstance(obs, Tuple):
+            # 如果是元组类型的观察空间，假设第一个元素是Box类型，第二个元素是Discrete类型
+            # todo 元组类型的第二个元素是干啥的？
             self.low = obs.spaces[0].low
             self.high = obs.spaces[0].high
             assert len(obs.spaces) == 2 and isinstance(obs.spaces[1], gym.spaces.Discrete)
@@ -30,7 +34,7 @@ class ScaledStateWrapper(gym.ObservationWrapper):
                 (gym.spaces.Box(low=-np.ones(self.low.shape), high=np.ones(self.high.shape),
                                 dtype=np.float32),
                  obs.spaces[1]))
-            self.compound = True
+            self.compound = True # 这个是干啥的？
         else:
             raise Exception("Unsupported observation space type: %s" % self.observation_space)
 
@@ -71,6 +75,9 @@ class ScaledParameterisedActionWrapper(gym.ActionWrapper):
     Changes the scale of the continuous action parameters to [-1,1].
     Parameter space must be flattened!
 
+    看起来这里是将动作空间中的连续参数缩放到[-1,1]范围内
+    这里假设动作空间是扁平化的，即参数空间不是嵌套的Tuple，而是直接展开的Box列表
+
     Tuple((
         Discrete(n),
         Box(c_1),
@@ -82,15 +89,17 @@ class ScaledParameterisedActionWrapper(gym.ActionWrapper):
 
     def __init__(self, env):
         super(ScaledParameterisedActionWrapper, self).__init__(env)
-        self.old_as = env.action_space
-        self.num_actions = self.old_as.spaces[0].n
-        self.high = [self.old_as.spaces[i].high for i in range(1, self.num_actions + 1)]
-        self.low = [self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)]
-        self.range = [self.old_as.spaces[i].high - self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)]
+        self.old_as = env.action_space # 获取旧的动作空间
+        self.num_actions = self.old_as.spaces[0].n # 离散动作的数量
+        self.high = [self.old_as.spaces[i].high for i in range(1, self.num_actions + 1)] # 每个离散动作对应的参数空间的高值
+        self.low = [self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)] # 每个离散动作对应的参数空间的低值
+        self.range = [self.old_as.spaces[i].high - self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)] # 每个参数空间的范围
+        # 这里创建一个新的动作空间，参数空间的范围被缩放到[-1,1]
         new_params = [  # parameters
             Box(-np.ones(self.old_as.spaces[i].low.shape), np.ones(self.old_as.spaces[i].high.shape), dtype=np.float32)
             for i in range(1, self.num_actions + 1)
         ]
+        # 构建新的动作空间
         self.action_space = Tuple((
             self.old_as.spaces[0],  # actions
             *new_params,
