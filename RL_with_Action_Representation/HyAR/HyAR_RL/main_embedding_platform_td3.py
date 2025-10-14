@@ -101,6 +101,12 @@ def run(args):
     env.seed(args.seed)
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
+    # 是在获取状态空间的维度数（状态特征的数量）。
+    '''
+    env.observation_space → 整个观察空间（Tuple类型）
+    .spaces[0] → Tuple中的第一个元素（Box空间，包含实际状态向量）
+    .shape[0] → Box空间的第一个维度（状态向量的长度）
+    '''
     state_dim = env.observation_space.spaces[0].shape[0]
 
     discrete_action_dim = env.action_space.spaces[0].n
