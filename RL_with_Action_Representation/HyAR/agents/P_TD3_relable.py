@@ -18,6 +18,12 @@ class Actor(nn.Module):
     预测输出的是实际的动作值
     '''
     def __init__(self, state_dim, discrete_action_dim, parameter_action_dim, max_action):
+        '''
+        state_dim: 环境的状态维度
+        discrete_action_dim: 离散动作的嵌入维度
+        parameter_action_dim: 连续动作的嵌入维度
+        max_action: 最大动作的范围
+        '''
         super(Actor, self).__init__()
 
         self.l1 = nn.Linear(state_dim, 256)
@@ -31,7 +37,7 @@ class Actor(nn.Module):
         '''
         state： 环境的观察
 
-        return: 预测的离散动作(根据上下文，这里输出的应该是离散动作的嵌入向量形式)和连续动作
+        return: 预测的离散动作(根据上下文，这里输出的应该是离散动作的嵌入向量形式)和连续动作嵌入
         '''
         a = F.relu(self.l1(state))
         a = F.relu(self.l2(a))
@@ -42,14 +48,21 @@ class Actor(nn.Module):
 
 class Critic(nn.Module):
     def __init__(self, state_dim, discrete_action_dim, parameter_action_dim):
+        '''
+        state_dim：环境的状态维度
+        discrete_action_dim：离散动作的嵌入维度
+        parameter_action_dim：连续动作的嵌入维度
+        '''
         super(Critic, self).__init__()
 
-        # Q1 architecture
+        # Q1 architecture 
+        # 输入环境+离散动过+连续动作预测Q值
         self.l1 = nn.Linear(state_dim + discrete_action_dim + parameter_action_dim, 256)
         self.l2 = nn.Linear(256, 256)
         self.l3 = nn.Linear(256, 1)
 
         # Q2 architecture
+        # 输入环境+离散动过+连续动作预测Q值
         self.l4 = nn.Linear(state_dim + discrete_action_dim + parameter_action_dim, 256)
         self.l5 = nn.Linear(256, 256)
         self.l6 = nn.Linear(256, 1)
@@ -78,32 +91,36 @@ class Critic(nn.Module):
 class TD3(object):
     def __init__(
             self,
-            state_dim,
-            discrete_action_dim,
-            parameter_action_dim,
-            max_action,
-            discount=0.99,
-            tau=0.005,
-            policy_noise=0.2,
-            noise_clip=0.5,
-            policy_freq=2
+            state_dim, # 环境的状态维度
+            discrete_action_dim, # 离散动作的嵌入维度
+            parameter_action_dim, # 连续动作的嵌入维度
+            max_action, # 最大动作的范围
+            discount=0.99, # 折扣因子
+            tau=0.005, # 目标模型软更新的系数
+            policy_noise=0.2, # todo
+            noise_clip=0.5, # todo
+            policy_freq=2 # todo
     ):
         self.discrete_action_dim = discrete_action_dim
         self.parameter_action_dim = parameter_action_dim
 
-        self.action_max = torch.from_numpy(np.ones((self.discrete_action_dim,))).float().to(device)
-        self.action_min = -self.action_max.detach()
-        self.action_range = (self.action_max - self.action_min).detach()
+        # 离散动作的范围
+        self.action_max = torch.from_numpy(np.ones((self.discrete_action_dim,))).float().to(device) # shape is (discrete_action_dim,) 全1
+        self.action_min = -self.action_max.detach() # shape is (discrete_action_dim,) 全-1
+        self.action_range = (self.action_max - self.action_min).detach() # shape is (discrete_action_dim,) 全2
 
-        self.action_parameter_max = torch.from_numpy(np.ones((self.parameter_action_dim,))).float().to(device)
-        self.action_parameter_min = -self.action_parameter_max.detach()
+        # 连续动作的范围
+        self.action_parameter_max = torch.from_numpy(np.ones((self.parameter_action_dim,))).float().to(device) # shape is (parameter_action_dim,) 全1
+        self.action_parameter_min = -self.action_parameter_max.detach() # shape is (parameter_action_dim,) 全-1
         # print(" self.action_parameter_max_numpy", self.action_parameter_max)
-        self.action_parameter_range = (self.action_parameter_max - self.action_parameter_min)
+        self.action_parameter_range = (self.action_parameter_max - self.action_parameter_min) # shape is (parameter_action_dim,) 全2
 
+        # 动作嵌入预测网络
         self.actor = Actor(state_dim, discrete_action_dim, parameter_action_dim, max_action).to(device)
         self.actor_target = copy.deepcopy(self.actor)
         self.actor_optimizer = torch.optim.Adam(self.actor.parameters(), lr=3e-4)  # 默认3e-4
 
+        # 评测网络
         self.critic = Critic(state_dim, discrete_action_dim, parameter_action_dim).to(device)
         self.critic_target = copy.deepcopy(self.critic)
         self.critic_optimizer = torch.optim.Adam(self.critic.parameters(), lr=3e-4)

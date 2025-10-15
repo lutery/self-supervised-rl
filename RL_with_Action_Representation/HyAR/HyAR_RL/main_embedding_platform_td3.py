@@ -109,13 +109,15 @@ def run(args):
     '''
     state_dim = env.observation_space.spaces[0].shape[0]
 
-    discrete_action_dim = env.action_space.spaces[0].n
+    discrete_action_dim = env.action_space.spaces[0].n # 离散动作的数量
+    # 构建每个离散动作对应的连续动作空间的维度
     action_parameter_sizes = np.array(
         [env.action_space.spaces[i].shape[0] for i in range(1, discrete_action_dim + 1)])
-    parameter_action_dim = int(action_parameter_sizes.sum())
+    parameter_action_dim = int(action_parameter_sizes.sum()) # 统计所有连续动作的维度和
+    # 这个应该是离散动作的嵌入维度和连续动作的嵌入维度
     discrete_emb_dim = discrete_action_dim * 2
     parameter_emb_dim = parameter_action_dim * 2
-    max_action = 1.0
+    max_action = 1.0 # todo 为什么定义最大的动作是1.0，是因为之前ScaledParameterisedActionWrapper？如果连续动作的原始范围是0.0~1.0呢？
     print("state_dim", state_dim)
     print("discrete_action_dim", discrete_action_dim)
     print("parameter_action_dim", parameter_action_dim)
@@ -141,6 +143,7 @@ def run(args):
     elif args.policy == "DDPG":
         policy = DDPG.DDPG(**kwargs)
 
+    # 加载预训练模型
     if args.load_model != "":
         policy_file = file_name if args.load_model == "default" else args.load_model
         policy.load(f"./models/{policy_file}")
