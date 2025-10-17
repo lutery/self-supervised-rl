@@ -173,6 +173,9 @@ def run(args):
                                                  max_size=int(1e6)
                                                  )
 
+    '''
+    observation_space: 
+    '''
     agent_pre = PDQNAgent(
         env.observation_space.spaces[0], env.action_space,
         batch_size=128,
