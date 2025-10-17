@@ -7,12 +7,12 @@ class ReplayBuffer(object):
                  max_size=int(1e6)):
         '''
         state_dim: 观察的维度
-        discrete_action_dim： 离散动作的
+        discrete_action_dim： 离散动作的维度
         parameter_action_dim： 存储连续动作的维度
-        all_parameter_action_dim： todo
-        discrete_emb_dim： todo
-        parameter_emb_dim： todo
-        max_size：todo
+        all_parameter_action_dim： 所有连续动作的维度总和
+        discrete_emb_dim： 离散动作转换为嵌入向量的维度
+        parameter_emb_dim： 连续动作转换为嵌入向量的维度
+        max_size： 缓冲区的最大大小
         '''
         self.max_size = max_size # 缓冲区的大小
         self.ptr = 0 # 缓冲区的位置索引
@@ -23,8 +23,8 @@ class ReplayBuffer(object):
         self.parameter_action = np.zeros((max_size, parameter_action_dim)) # 离散动作对应的连续动作的值
         self.all_parameter_action = np.zeros((max_size, all_parameter_action_dim)) #  所有连续动作的值
 
-        self.discrete_emb = np.zeros((max_size, discrete_emb_dim)) # todo
-        self.parameter_emb = np.zeros((max_size, parameter_emb_dim)) # todo
+        self.discrete_emb = np.zeros((max_size, discrete_emb_dim)) # 离散动作的嵌入向量
+        self.parameter_emb = np.zeros((max_size, parameter_emb_dim)) # 连续动作的嵌入向量
         self.next_state = np.zeros((max_size, state_dim)) # 执行动作后的下一个状态
         self.state_next_state = np.zeros((max_size, state_dim)) # 新state和旧state之间的差值
 
