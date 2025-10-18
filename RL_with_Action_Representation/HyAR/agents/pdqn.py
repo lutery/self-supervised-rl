@@ -335,6 +335,11 @@ class PDQNAgent(Agent):
             self.epsilon = self.epsilon_final
 
     def act(self, state):
+        '''
+        state: 环境的观察
+
+        return 返回选择的离散动作索引，所选离散动作对应的连续动作向量，所有连续动作的向量
+        '''
         with torch.no_grad():
             state = torch.from_numpy(state).to(self.device)
 
@@ -371,6 +376,7 @@ class PDQNAgent(Agent):
             if self.use_ornstein_noise and self.noise is not None:
                 # 这里是使用Ornstein-Uhlenbeck噪声对所选离散动作对应的连续动作进行探索
                 all_action_parameters[offset:offset + self.action_parameter_sizes[action]] += self.noise.sample()[offset:offset + self.action_parameter_sizes[action]]
+            # 获取离散动作对应的连续动作
             action_parameters = all_action_parameters[offset:offset+self.action_parameter_sizes[action]]
             # if self._step%100==0 :
             #     print("action, all_action_parameters",action, all_action_parameters)

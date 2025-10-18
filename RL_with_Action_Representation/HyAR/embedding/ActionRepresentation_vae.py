@@ -21,7 +21,7 @@ class VAE(nn.Module):
         state_dim: 环境观察的维度
         action_dim: 离散动作的维度
         action_embedding_dim：离散动作对应的连续动作值的维度
-        parameter_action_dim：所有离散动作对应的连续动作的维度
+        parameter_action_dim：离散动作对应的连续动作的维度（当前的代码中每个离散动作对应的连续动作的维度都是相同的）
         latent_dim: todo 动作潜在空间的维度
         max_action: 动作的最大值，看来必须要对称
         hidden_size: 隐藏层的尺寸
@@ -62,6 +62,8 @@ class VAE(nn.Module):
         state:环境观察
         action: 离散动作的嵌入向量 
         action_parameter: 离散动作对应的连续动作的值
+
+        结合输入的参数计算得到状态、动作的潜在空间，利用潜在空间进行重建连续动作和观察差值
         '''
         
         z_0 = F.relu(self.e0_0(torch.cat([state, action], 1))) # 离散动作和环境的组合提取特征
@@ -80,8 +82,8 @@ class VAE(nn.Module):
         z = mean + std * torch.randn_like(std) # 基于均值的采样
         u, s = self.decode(state, z, action) # 解码得到重构的动作和状态（这里的观察是新旧状态之间的差值）
 
-        # todo 确认这里的返回值是啥？
-        # 返回重建后的所有动作连续动作、观察（这里的观察是新旧状态之间的差值）、连续动作对应的潜在空间的均值和方差
+        # 确认这里的返回值是啥？
+        # 返回重建后的离散动作对应连续动作、观察（这里的观察是新旧状态之间的差值）、连续动作对应的潜在空间的均值和方差
         return u, s, mean, std
 
     def decode(self, state, z=None, action=None, clip=None, raw=False):
@@ -91,7 +93,7 @@ class VAE(nn.Module):
         action：离散动作的嵌入向量 
         raw： True仅返回预测的所有离散动作的连续值，False返回重建后的观察和预测的所有离散动作的连续值
 
-        return: 返回重建后的观察（这里的观察是新旧状态之间的差值）和预测的所有离散动作的连续值
+        return: 返回重建后的观察（这里的观察是新旧状态之间的差值）和重建的离散动作的对应的连续动作值值
         '''
         # When sampling from the VAE, the latent vector is clipped to [-0.5, 0.5]
         if z is None:
@@ -187,6 +189,7 @@ class Action_representation(NeuralNet):
 
         return: vae重建损失、观察变化损失、连续动作重建损失、KL约束散度损失
         '''
+        # recon_c：重建后的离散动作对应连续动作的值
         # recon_s: 重构新旧状态之间的差值观察
         recon_c, recon_s, mean, std = self.vae(state, action_d, action_c)
 

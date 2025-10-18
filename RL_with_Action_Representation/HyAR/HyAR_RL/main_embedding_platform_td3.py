@@ -21,6 +21,15 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
 def pad_action(act, act_param):
+    '''
+    act: 离散动作
+    act_param: 离散动作对应的连续动作参数
+    结合这里，可以知道本游戏的空间的连续动作参数是3维的（每个离散动作对应1维）
+    但代码貌似可以推广到不同维度的情况 todo 如何推广
+    同时代码中也可以用于每个连续动作的范围是不一样的情况
+
+    返回组合后的动作：action = (discrete_action_index, [param_0, param_1, param_2])
+    '''
     params = [np.zeros((1,), dtype=np.float32), np.zeros((1,), dtype=np.float32), np.zeros((1,), dtype=np.float32)]
     params[act][:] = act_param
     return (act, params)
@@ -78,6 +87,8 @@ def run(args):
         env = gym.make(args.env) # 看来是直接注册到gym里的，所以可以直接make
         env = ScaledStateWrapper(env) # 主要构建一个-1~1的观察空间
         '''
+        当前代码的事例，每个离散动作都对应着连续动作
+        每个连续动作的维度都相同，但是原始范围不同
         这是为每个动作设置的初始参数值:
         这里应该是将初始动作值缩放到-1~1之间
 
@@ -150,6 +161,7 @@ def run(args):
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # embedding初始部分
+    # 从这里可以看出，这里的每个离散动作对应的连续动作的维度依旧是1，但是每个连续动作的原始范围不同
     action_rep = ActionRepresentation_vae.Action_representation(state_dim=state_dim,
                                                                   action_dim=discrete_action_dim,
                                                                   parameter_action_dim=1,
@@ -199,26 +211,31 @@ def run(args):
 
     max_steps = 250 # todo 为啥步数会这么大
     total_reward = 0. # 所有游戏回合的总奖励
-    returns = [] # 记录每轮游戏的总回报
+    returns = [] # 记录每轮游戏的总奖励
     for i in range(5000):
         state, _ = env.reset()
         state = np.array(state, dtype=np.float32, copy=False)
         act, act_param, all_action_parameters = agent_pre.act(state)
+        # 将预测到的离散动作act和离散动作对应的连续动作act_param组合起来
         action = pad_action(act, act_param)
-        episode_reward = 0.
-        agent_pre.start_episode()
+        episode_reward = 0. # 一轮游戏内的奖励综合
+        agent_pre.start_episode() # 该代码中暂无实际用处
         for j in range(max_steps):
             ret = env.step(action)
-            (next_state, steps), reward, terminal, _ = ret
+            (next_state, steps), reward, terminal, _ = ret # 看来返回内容有优点不一样了，没关系
             next_state = np.array(next_state, dtype=np.float32, copy=False)
             next_act, next_act_param, next_all_action_parameters = agent_pre.act(next_state)
             next_action = pad_action(next_act, next_act_param)
-            state_next_state = next_state - state
+            state_next_state = next_state - state # 保存状态差值
+            # 记录采集的样本数据到缓冲区中
             replay_buffer_embedding.add(state, act, act_param, all_action_parameters, discrete_emb=None,
                                         parameter_emb=None,
                                         next_state=next_state,
                                         state_next_state=state_next_state,
                                         reward=reward, done=terminal)
+            # # 下面好像都没必要？因为后续会直接被覆盖
+            # 因为这里采用的采集代码流程结构，所以这里对next_state计算的act实际上就是提前
+            # 对下一轮的进行预测，然后方便后续传入step计算
             act, act_param, all_action_parameters = next_act, next_act_param, next_all_action_parameters
             action = next_action
             state = next_state
@@ -439,12 +456,21 @@ def run(args):
 
 
 def vae_train(action_rep, train_step, replay_buffer, batch_size, save_dir, vae_save_model, embed_lr):
-    initial_losses = []
+    '''
+    action_rep: action representation model todo
+    train_step: 采样的总轮数，控制训练的轮数
+    replay_buffer: 缓冲区
+    batch_size: 训练batch
+    save_dir: 存储的目录
+    vae_save_model: 是否保存vae模型
+    embed_lr: embed学习率
+    '''
+    initial_losses = [] # 保存每次训练的损失均值
     for counter in range(int(train_step) + 10):
-        losses = []
+        losses = [] # 这里估计是为了方便后续能够计算loss mean平均值
         state, discrete_action, parameter_action, all_parameter_action, discrete_emb, parameter_emb, next_state, state_next_state, reward, not_done = replay_buffer.sample(
             batch_size)
-
+        # 完成VAE重建模型的训练，vae重建损失、观察变化损失、连续动作重建损失、KL约束散度损失 以上损失都只是标量值，估计只是为了记录 
         vae_loss, recon_loss_s, recon_loss_c, KL_loss = action_rep.unsupervised_loss(state,
                                                                                      discrete_action.reshape(1,
                                                                                                              -1).squeeze().long(),
@@ -461,6 +487,10 @@ def vae_train(action_rep, train_step, replay_buffer, batch_size, save_dir, vae_s
             print("discrete embedding", action_rep.discrete_embedding())
 
         # Terminate initial phase once action representations have converged.
+        # len(initial_losses) >= train_step：确保至少训练了train_step轮（在代码中通常是5000轮）
+        # np.mean(initial_losses[-5:]) + 1e-5 >= np.mean(initial_losses[-10:])：最近5次的平均损失 vs 最近10次的平均损失、添加小的容忍度 1e-5 避免数值精度问题
+        # 如果损失还在下降那么最近5次的损失一定小于最近10次的损失，说明模型还在学习
+        # 如果损失稳定了，那么最近5次加上一个小值则肯定大于最近10次的损失，则退出训练
         if len(initial_losses) >= train_step and np.mean(initial_losses[-5:]) + 1e-5 >= np.mean(initial_losses[-10:]):
             # print("vae_loss, recon_loss_s, recon_loss_c, KL_loss", vae_loss, recon_loss_s, recon_loss_c, KL_loss)
             # print("Epoch {} loss:: {}".format(counter, np.mean(initial_losses[-50:])))
@@ -474,6 +504,7 @@ def vae_train(action_rep, train_step, replay_buffer, batch_size, save_dir, vae_s
 
     state_, discrete_action_, parameter_action_, all_parameter_action, discrete_emb, parameter_emb, next_state, state_next_state_, reward, not_done = replay_buffer.sample(
         batch_size=5000)
+    # 离散动作潜在空间的边界范围、重建观察差值损失
     c_rate, recon_s = action_rep.get_c_rate(state_, discrete_action_.reshape(1, -1).squeeze().long(), parameter_action_,
                                             state_next_state_, batch_size=5000, range_rate=2)
     return c_rate, recon_s
