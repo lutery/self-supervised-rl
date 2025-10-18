@@ -173,9 +173,6 @@ def run(args):
                                                  max_size=int(1e6)
                                                  )
 
-    '''
-    observation_space: 
-    '''
     agent_pre = PDQNAgent(
         env.observation_space.spaces[0], env.action_space,
         batch_size=128,
@@ -200,9 +197,9 @@ def run(args):
 
     # ------Use random strategies to collect experience------
 
-    max_steps = 250
-    total_reward = 0.
-    returns = []
+    max_steps = 250 # todo 为啥步数会这么大
+    total_reward = 0. # 所有游戏回合的总奖励
+    returns = [] # 记录每轮游戏的总回报
     for i in range(5000):
         state, _ = env.reset()
         state = np.array(state, dtype=np.float32, copy=False)

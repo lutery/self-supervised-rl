@@ -94,12 +94,14 @@ class ScaledParameterisedActionWrapper(gym.ActionWrapper):
         self.high = [self.old_as.spaces[i].high for i in range(1, self.num_actions + 1)] # 每个离散动作对应的参数空间的高值
         self.low = [self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)] # 每个离散动作对应的参数空间的低值
         self.range = [self.old_as.spaces[i].high - self.old_as.spaces[i].low for i in range(1, self.num_actions + 1)] # 每个参数空间的范围
-        # 这里创建一个新的动作空间，参数空间的范围被缩放到[-1,1]
+        # 这里创建一个新的动作空间，将连续动作的参数空间的范围被缩放到[-1,1]
         new_params = [  # parameters
             Box(-np.ones(self.old_as.spaces[i].low.shape), np.ones(self.old_as.spaces[i].high.shape), dtype=np.float32)
             for i in range(1, self.num_actions + 1)
         ]
         # 构建新的动作空间
+        # self.action_space[0]是离散动作空间
+        # 后面的Box是缩放后的连续参数空间
         self.action_space = Tuple((
             self.old_as.spaces[0],  # actions
             *new_params,

@@ -49,6 +49,13 @@ def array_min2d(x):
 
 class Memory(object):
     def __init__(self, limit, observation_shape, action_shape, next_actions=False):
+        '''
+        limit: 作用是定义经验回放缓冲区的大小，以及初始化actor和actor参数网络及其目标网络。
+        observation_shape: 观察空间的形状
+        action_shape: 动作空间的形状，这里是一个元组，包含离散动作维度和连续动作参数的总维度之和，即(1 + action_parameter_size)
+        next_actions: 是否存储下一步的动作
+        '''
+
         self.limit = limit
 
         self.states = RingBuffer(limit, shape=observation_shape)

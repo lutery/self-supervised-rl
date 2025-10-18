@@ -17,6 +17,13 @@ import matplotlib.pyplot as plt
 class QActor(nn.Module):
 
     def __init__(self, state_size, action_size, action_parameter_size):
+        '''
+        state_size: 观察空间的shape
+        action_size: 离散动作的数量
+        action_parameter_size: 所有连续动作的总维度
+
+        预测每一个离散动作的Q值
+        '''
         super(QActor, self).__init__()
         self.state_size = state_size
         self.action_size = action_size
@@ -24,6 +31,7 @@ class QActor(nn.Module):
 
         # create layers
         self.layers = nn.ModuleList()
+        # todo 输入状态和所有连续动作向量，得到离散动作的预测？
         inputSize = self.state_size + self.action_parameter_size
         self.layers.append(nn.Linear(inputSize, 256))
         self.layers.append(nn.Linear(256, 256))
@@ -43,6 +51,11 @@ class QActor(nn.Module):
 class ParamActor(nn.Module):
 
     def __init__(self, state_size, action_size, action_parameter_size):
+        '''
+        state_size: 观察空间的shape
+        action_size: 离散动作的数量
+        action_parameter_size: 所有连续动作的总维度
+        '''
         super(ParamActor, self).__init__()
 
         self.state_size = state_size
@@ -53,26 +66,41 @@ class ParamActor(nn.Module):
         # create layers
         self.layers = nn.ModuleList()
         inputSize = self.state_size
+        # 这个负责从观察提取特征
         self.layers.append(nn.Linear(inputSize, 256))
         self.layers.append(nn.Linear(256, 256))
 
+        # 预测所有连续动作的值
         self.action_parameters_output_layer = nn.Linear(256, self.action_parameter_size)
+        # 有点像残差操作，直接从观察跳连到预测到所有连续动作的值
         self.action_parameters_passthrough_layer = nn.Linear(self.state_size, self.action_parameter_size)
 
-
+        # 初始化权重action_parameters_passthrough_layer为0
         nn.init.zeros_(self.action_parameters_passthrough_layer.weight)
         nn.init.zeros_(self.action_parameters_passthrough_layer.bias)
         # fix passthrough layer to avoid instability, rest of network can compensate
+        # todo 为啥action_parameters_passthrough_layer层不用训练？作用是什么？
+        # 后续确认下这个层的作用，AI一开始回复说是为了保证反向传播有多条路径，避免action_parameters_output_layer出现
+        # 梯度消失的情况，但是requires_grad设置为False其反向传播也被终止了，那么所描述的作用就没有了
+        # 所以有待进一步确认，难道是为了后续手动设置值实现动作探索？
         self.action_parameters_passthrough_layer.requires_grad = False
         self.action_parameters_passthrough_layer.weight.requires_grad = False
         self.action_parameters_passthrough_layer.bias.requires_grad = False
 
     def forward(self, state):
+        '''
+        state：输入环境的观察
+
+        return 返回预测的所有连续动作的向量
+        '''
         x = state
 
+        # 提取环境的特征
         x = F.relu(self.layers[0](x))
         x = F.relu(self.layers[1](x))
+        # 预测所有离散动作对应连续动作的值
         action_params = self.action_parameters_output_layer(x)
+        # action_parameters_passthrough_layer层在PDQN算法中起到训练稳定化和梯度保障的关键作用
         action_params += self.action_parameters_passthrough_layer(state)
         # if self.squashing_function:
         #     assert False  # scaling not implemented yet
@@ -116,33 +144,64 @@ class PDQNAgent(Agent):
                  random_weighted=False,
                  device="cuda" if torch.cuda.is_available() else "cpu",
                  seed=None):
+        '''
+        observation_space: 观察空间的shape
+        action_space: 动作空间的shape
+        batch_size: 每次训练采样的批量大小
+        learning_rate_actor: actor网络的学习率
+        learning_rate_actor_param: actor参数网络的学习率
+        epsilon_steps: 用于epsilon衰减的时间步数
+        gamma: 折扣因子
+        tau_actor: actor网络的软更新系数
+        tau_actor_param: actor参数网络的软更新系数
+        clip_grad: 梯度裁剪的阈值
+        indexed, weighted, average, random_weighted: 这些参数控制经验回放的采样方式
+        initial_memory_threshold: 在开始训练前，经验回放中需要积累的最小样本数
+        use_ornstein_noise: 是否使用Ornstein-Uhlenbeck噪声进行探索
+        replay_memory_size: 经验回放的最大容量
+        epsilon_final: epsilon的最终值
+        inverting_gradients: 是否使用反向梯度技术
+        zero_index_gradients: 是否对索引为0的动作进行梯度更新
+        seed: 随机种子
+        '''
 
         super(PDQNAgent, self).__init__(observation_space, action_space)
         self.device = torch.device(device)
-        self.num_actions = self.action_space.spaces[0].n
-        self.action_parameter_sizes = np.array([self.action_space.spaces[i].shape[0] for i in range(1,self.num_actions+1)])
-        self.action_parameter_size = int(self.action_parameter_sizes.sum())
-        self.action_max = torch.from_numpy(np.ones((self.num_actions,))).float().to(device)
-        self.action_min = -self.action_max.detach()
-        self.action_range = (self.action_max-self.action_min).detach()
-        self.action_parameter_max_numpy = np.concatenate([self.action_space.spaces[i].high for i in range(1,self.num_actions+1)]).ravel()
-        self.action_parameter_min_numpy = np.concatenate([self.action_space.spaces[i].low for i in range(1,self.num_actions+1)]).ravel()
-        self.action_parameter_range_numpy = (self.action_parameter_max_numpy - self.action_parameter_min_numpy)
-        self.action_parameter_max = torch.from_numpy(self.action_parameter_max_numpy).float().to(device)
-        self.action_parameter_min = torch.from_numpy(self.action_parameter_min_numpy).float().to(device)
-        self.action_parameter_range = torch.from_numpy(self.action_parameter_range_numpy).float().to(device)
+        self.num_actions = self.action_space.spaces[0].n # 获取离散动作的数量
+        self.action_parameter_sizes = np.array([self.action_space.spaces[i].shape[0] for i in range(1,self.num_actions+1)]) # 获取每个离散动作对应连续动作的维度
+        self.action_parameter_size = int(self.action_parameter_sizes.sum()) # 获取所有连续动作参数的总维度
+        self.action_max = torch.from_numpy(np.ones((self.num_actions,))).float().to(device) # 离散动作的最大值 todo 全1？
+        self.action_min = -self.action_max.detach() # 离散动作的最小值 todo 全-1？
+        self.action_range = (self.action_max-self.action_min).detach() # 离散动作的范围 todo 全2？
+        self.action_parameter_max_numpy = np.concatenate([self.action_space.spaces[i].high for i in range(1,self.num_actions+1)]).ravel() # 获取所有连续动作参数每个维度的最大值，并通过.ravel()将最大值维度展平
+        self.action_parameter_min_numpy = np.concatenate([self.action_space.spaces[i].low for i in range(1,self.num_actions+1)]).ravel() # 获取所有连续动作参数每个维度的最小值，并通过.ravel()将最小值维度展平
+        self.action_parameter_range_numpy = (self.action_parameter_max_numpy - self.action_parameter_min_numpy) # 获取所有连续动作参数每个维度的范围
+        self.action_parameter_max = torch.from_numpy(self.action_parameter_max_numpy).float().to(device) # 将连续动作参数的最大值转换为torch张量
+        self.action_parameter_min = torch.from_numpy(self.action_parameter_min_numpy).float().to(device) # 将连续动作参数的最小值转换为torch张量
+        self.action_parameter_range = torch.from_numpy(self.action_parameter_range_numpy).float().to(device) # 将连续动作参数的范围转换为torch张量
         self.epsilon = epsilon_initial
         self.epsilon_initial = epsilon_initial
         self.epsilon_final = epsilon_final
-        self.epsilon_steps = epsilon_steps
-        self.indexed = indexed
-        self.weighted = weighted
-        self.average = average
-        self.random_weighted = random_weighted
+        self.epsilon_steps = epsilon_steps # 每步减少的epsilon的量
+        self.indexed = indexed # todo
+        self.weighted = weighted # todo
+        self.average = average # todo
+        self.random_weighted = random_weighted # todo
         assert (weighted ^ average ^ random_weighted) or not (weighted or average or random_weighted)
 
-        self.action_parameter_offsets = self.action_parameter_sizes.cumsum()
-        self.action_parameter_offsets = np.insert(self.action_parameter_offsets, 0, 0)
+        '''
+        import numpy as np
+
+        arr = np.array([1, 2, 3, 4])
+        cumsum_result = arr.cumsum()
+        print(cumsum_result)  # [1 3 6 10]
+
+        # 计算过程：
+        # [1, 1+2, 1+2+3, 1+2+3+4]
+        # [1, 3, 6, 10]
+        '''
+        self.action_parameter_offsets = self.action_parameter_sizes.cumsum() # 是 NumPy 中的累积求和函数（cumulative sum），它计算数组元素的累积和
+        self.action_parameter_offsets = np.insert(self.action_parameter_offsets, 0, 0) # 根据维度的累积求和，可以获取对应连续动作向量的起始和结束位置，方便提取对应连续动作的实际向量值，可以看md
         self.batch_size = batch_size
         self.gamma = gamma
         self.replay_memory_size = replay_memory_size
@@ -163,18 +222,21 @@ class PDQNAgent(Agent):
         self._seed(seed)
 
         self.use_ornstein_noise = use_ornstein_noise
+        # Ornstein-Uhlenbeck噪声，用于连续动作参数的探索
         self.noise = OrnsteinUhlenbeckActionNoise(self.action_parameter_size, random_machine=self.np_random, mu=0., theta=0.15, sigma=0.0001) #, theta=0.01, sigma=0.01)
 
         print("--------",self.num_actions+self.action_parameter_size)
         # print(observation_space.shape,self.observation_space.shape[0])
         self.replay_memory = Memory(replay_memory_size, observation_space.shape, (1+self.action_parameter_size,), next_actions=False)
+        # 离散动作预测模型
         self.actor = actor_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device)
-        self.actor_target = actor_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device)
+        self.actor_target = actor_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device) # 不训练
         hard_update_target_network(self.actor, self.actor_target)
         self.actor_target.eval()
 
+        # 连续动作预测模型
         self.actor_param = actor_param_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device)
-        self.actor_param_target = actor_param_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device)
+        self.actor_param_target = actor_param_class(self.observation_space.shape[0], self.num_actions, self.action_parameter_size).to(device) # 不训练
         hard_update_target_network(self.actor_param, self.actor_param_target)
         self.actor_param_target.eval()
 
@@ -183,8 +245,10 @@ class PDQNAgent(Agent):
         # Original DDPG paper [Lillicrap et al. 2016] used a weight decay of 0.01 for Q (critic)
         # but setting weight_decay=0.01 on the critic_optimiser seems to perform worse...
         # using AMSgrad ("fixed" version of Adam, amsgrad=True) doesn't seem to help either...
+        # 创建优化器
         self.actor_optimiser = optim.Adam(self.actor.parameters(), lr=self.learning_rate_actor) #, betas=(0.95, 0.999))
         self.actor_param_optimiser = optim.Adam(self.actor_param.parameters(), lr=self.learning_rate_actor_param) #, betas=(0.95, 0.999)) #, weight_decay=critic_l2_reg)
+        # 以下变量的作用
         self.cost_his = []
 
         self.macro_action=[]
@@ -274,18 +338,22 @@ class PDQNAgent(Agent):
         with torch.no_grad():
             state = torch.from_numpy(state).to(self.device)
 
-            all_action_parameters = self.actor_param.forward(state)
+            all_action_parameters = self.actor_param.forward(state) # 预测所有连续动作参数的值
 
             # Hausknecht and Stone [2016] use epsilon greedy actions with uniform random action-parameter exploration
             rnd = self.np_random.uniform()
             if rnd < 1.0:
+                # 这里就是随机探索离散动作和连续动作
+                # 随机选择一个离散动作
                 action = self.np_random.choice(self.num_actions)
                 if not self.use_ornstein_noise:
+                    # 如果不使用Ornstein-Uhlenbeck噪声，则对所有连续动作参数进行均匀随机采样
                     all_action_parameters = torch.from_numpy(np.random.uniform(self.action_parameter_min_numpy,
                                                               self.action_parameter_max_numpy))
             else:
-                # select maximum action
+                # select maximum action 如果不随机探索则选择Q值最大的离散动作
                 # print("sssssssssssssss",state.unsqueeze(0),all_action_parameters.unsqueeze(0))
+                # 根据状态和连续动作的值，预测每一个离散动作的Q值
                 Q_a = self.actor.forward(state.unsqueeze(0), all_action_parameters.unsqueeze(0))
                 Q_a = Q_a.detach().cpu().data.numpy()
                 action = np.argmax(Q_a)  #返回最大离散动作的索引
@@ -294,9 +362,14 @@ class PDQNAgent(Agent):
 
             # add noise only to parameters of chosen action
             all_action_parameters = all_action_parameters.cpu().data.numpy()
+            # for i in range(action)：遍历所选离散动作之前的离散动作所对应的连续动作的维度值
+            # sum: 计算遍历连续动作维度的和，得到所选离散动作对应连续动作在总连续动作向量中的起始位置
+            # AI说这了直接使用action_parameter_offsets这个预计算好的值效率更高
             offset = np.array([self.action_parameter_sizes[i] for i in range(action)], dtype=int).sum()
 
+            # all_action_parameters[offset:offset + self.action_parameter_sizes[action]]就是提取所选离散动作对应连续动作的向量值
             if self.use_ornstein_noise and self.noise is not None:
+                # 这里是使用Ornstein-Uhlenbeck噪声对所选离散动作对应的连续动作进行探索
                 all_action_parameters[offset:offset + self.action_parameter_sizes[action]] += self.noise.sample()[offset:offset + self.action_parameter_sizes[action]]
             action_parameters = all_action_parameters[offset:offset+self.action_parameter_sizes[action]]
             # if self._step%100==0 :
