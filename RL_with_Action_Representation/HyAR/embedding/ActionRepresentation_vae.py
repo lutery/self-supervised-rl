@@ -63,7 +63,7 @@ class VAE(nn.Module):
         action: 离散动作的嵌入向量 
         action_parameter: 离散动作对应的连续动作的值
 
-        结合输入的参数计算得到状态、动作的潜在空间，利用潜在空间进行重建连续动作和观察差值
+        结合输入的参数计算得到返回重建后的离散动作对应连续动作、观察（这里的观察是新旧状态之间的差值）、连续动作对应的潜在空间的均值和方差
         '''
         
         z_0 = F.relu(self.e0_0(torch.cat([state, action], 1))) # 离散动作和环境的组合提取特征
@@ -335,7 +335,7 @@ class Action_representation(NeuralNet):
         s1 = s1.to(self.device)
         s2 = s2.to(self.device)
         a2 = a2.to(self.device)
-        recon_c, recon_s, mean, std = self.vae(s1, a1, a2) # 利用vae计算预测的重建观察差值、重建连续动作、重建离散动作均值和方差
+        recon_c, recon_s, mean, std = self.vae(s1, a1, a2) # 利用vae计算预测的返回重建后的离散动作对应连续动作、观察（这里的观察是新旧状态之间的差值）、连续动作对应的潜在空间的均值和方差
         # print("recon_s",recon_s.shape)
         # std * torch.randn_like(std)：实现VAE的重参数化技巧(Reparameterization Trick)
         '''
