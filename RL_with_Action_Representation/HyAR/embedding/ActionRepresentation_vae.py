@@ -346,9 +346,9 @@ class Action_representation(NeuralNet):
 
         保证梯度可以传播又可以保证随机性，如果直接torch.normal(mean, std)计算采样得到的动作是无法传播的
         '''
-        z = mean + std * torch.randn_like(std) # 采样离散动作
+        z = mean + std * torch.randn_like(std) # 采样连续动作
         z = z.cpu().data.numpy()
-        # 返回离散动作的潜在空间的边界值范围
+        # 返回连续动作的潜在空间的边界值范围
         c_rate = self.z_range(z, batch_size, range_rate)
         # print("s2",s2.shape)
 
@@ -361,7 +361,7 @@ class Action_representation(NeuralNet):
     def z_range(self, z, batch_size=100, range_rate=5):
         '''
         函数的作用是计算潜在空间采样值的动态边界范围
-        z: 采样得到的离散动作
+        z: 采样得到的连续动作
         batch_size: 训练batch
         range_rate：todo
         '''
