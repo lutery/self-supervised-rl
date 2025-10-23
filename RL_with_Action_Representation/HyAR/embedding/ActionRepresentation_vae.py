@@ -237,7 +237,7 @@ class Action_representation(NeuralNet):
     def select_parameter_action(self, state, z, action):
         '''
         state: 环境观察
-        z: 预测连续动作并转换为真实动作范围的连续动作嵌入向量
+        z: TD3或者其他的动作预测网络预测连续动作并转换为VAE真实动作范围的连续动作嵌入向量
         action：预测离散动作的嵌入向量
 
         return 返回预测的连续动作的连续动作值
@@ -346,9 +346,10 @@ class Action_representation(NeuralNet):
 
         保证梯度可以传播又可以保证随机性，如果直接torch.normal(mean, std)计算采样得到的动作是无法传播的
         '''
-        z = mean + std * torch.randn_like(std) # 采样连续动作
+        z = mean + std * torch.randn_like(std) # 采样连续动作的潜在空间
         z = z.cpu().data.numpy()
-        # 返回连续动作的潜在空间的边界值范围
+        # 返回连续动作的潜在空间的每个维度边界值范围 todo 如果是这样，我感觉这里的batch_size应该要尽可能的大
+        # 才能尽可能的准确覆盖合理的边界值
         c_rate = self.z_range(z, batch_size, range_rate)
         # print("s2",s2.shape)
 
@@ -361,19 +362,21 @@ class Action_representation(NeuralNet):
     def z_range(self, z, batch_size=100, range_rate=5):
         '''
         函数的作用是计算潜在空间采样值的动态边界范围
-        z: 采样得到的连续动作
+        z: 采样得到的连续动作的潜在空间值，todo z的第一个维度是batch_size，第二个维度是潜在空间的维度
         batch_size: 训练batch
         range_rate：todo
         '''
 
-        # todo
+        # 这里的zx列表时存储连续动作的潜在空间对应维度的所有值
+        # 例如z1表示存储潜在空间中第一个维度的所有值
         self.z1, self.z2, self.z3, self.z4, self.z5, self.z6, self.z7, self.z8, self.z9,\
         self.z10,self.z11,self.z12,self.z13,self.z14,self.z15,self.z16 = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
-        border = int(range_rate * (batch_size / 100)) # # 计算边界索引 todo 这个值可能是需要根据实际进行调整
+        border = int(range_rate * (batch_size / 100)) # # 计算边界索引
+        # 这里不直接使用首尾值是为了避免异常值导致的不稳定的边界，类似于去掉最高分和最低分
 
         # print("border",border)
         if len(z[0]) == 16:
-            # # 对每个潜在维度分别处理
+            # 遍历每个batch，收集每个维度的所有值到对应的列表中
             for i in range(len(z)):
                 self.z1.append(z[i][0]) # # 收集第1维的所有值
                 self.z2.append(z[i][1]) # 收集第2维的所有值
@@ -393,7 +396,7 @@ class Action_representation(NeuralNet):
                 self.z16.append(z[i][15]) # 收集第16维的所有值
 
         if len(z[0]) == 16:
-            # 对收集后的维度所有值进行排序
+            # 对收集后的对应维度所有值进行排序
             self.z1.sort(), self.z2.sort(), self.z3.sort(), self.z4.sort(), self.z5.sort(), self.z6.sort(), self.z7.sort(), self.z8.sort(), \
             self.z9.sort(), self.z10.sort(), self.z11.sort(), self.z12.sort(),self.z13.sort(), self.z14.sort(), self.z15.sort(), self.z16.sort()
             c_rate_1_up = self.z1[-border - 1] # # 上边界：排序后的第95%分位
@@ -429,6 +432,7 @@ class Action_representation(NeuralNet):
             c_rate_16_up = self.z16[-border - 1]
             c_rate_16_down = self.z16[border]
 
+            # 将上下边界添加到对应的c_rate列表中
             c_rate_1, c_rate_2, c_rate_3, c_rate_4, c_rate_5, c_rate_6, c_rate_7, c_rate_8, \
             c_rate_9, c_rate_10, c_rate_11, c_rate_12, c_rate_13, c_rate_14, c_rate_15, c_rate_16 = [], [], [], [], [], [], [], [], [], [], [], [], [], [], [], []
             c_rate_1.append(c_rate_1_up), c_rate_1.append(c_rate_1_down)

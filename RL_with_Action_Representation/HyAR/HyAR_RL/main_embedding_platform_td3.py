@@ -126,8 +126,8 @@ def run(args):
         [env.action_space.spaces[i].shape[0] for i in range(1, discrete_action_dim + 1)])
     parameter_action_dim = int(action_parameter_sizes.sum()) # 统计所有连续动作的维度和
     # 这个应该是离散动作的嵌入维度和连续动作的嵌入维度
-    discrete_emb_dim = discrete_action_dim * 2
-    parameter_emb_dim = parameter_action_dim * 2
+    discrete_emb_dim = discrete_action_dim * 2 # todo 这里为什么是乘以2？
+    parameter_emb_dim = parameter_action_dim * 2 # todo 这里为什么是乘以2？
     max_action = 1.0 # todo 为什么定义最大的动作是1.0，是因为之前ScaledParameterisedActionWrapper？如果连续动作的原始范围是0.0~1.0呢？
     print("state_dim", state_dim)
     print("discrete_action_dim", discrete_action_dim)
@@ -185,6 +185,8 @@ def run(args):
                                                  max_size=int(1e6)
                                                  )
 
+    # 这里主要用于样本采集，虽然里面有定义优化器
+    # 但是实际上在本代码中并未调用
     agent_pre = PDQNAgent(
         env.observation_space.spaces[0], env.action_space,
         batch_size=128,
@@ -279,22 +281,24 @@ def run(args):
     # -------TD3训练------
     print("TD3 train")
     state, done = env.reset(), False
-    total_reward = 0.
-    returns = []
-    Reward = []
-    Reward_100 = []
-    Test_Reward_100 = []
+    total_reward = 0. # 所有训练期间的总奖励
+    returns = [] # 每轮游戏的奖励
+    Reward = [] # 总平均奖励
+    Reward_100 = [] # 近100轮游戏的奖励
+    Test_Reward_100 = [] # 近100轮测试的奖励
     Test_epioside_step_100 = []
-    max_steps = 250
+    max_steps = 250 # 每次游戏的最大步数
     cur_step = 0
     internal = 10
     total_timesteps = 0
     t = 0
     discrete_relable_rate, parameter_relable_rate = 0, 0
     # for t in range(int(args.max_episodes)):
-    while total_timesteps < args.max_timesteps:
+    while total_timesteps < args.max_timesteps: # 游戏训练的总轮数
         state, _ = env.reset()
         state = np.array(state, dtype=np.float32, copy=False)
+        # 这里预测的动作都是嵌入潜在空间的动作
+        # 这里是TD3网络预测的动作潜在空间的动作向量
         discrete_emb, parameter_emb = policy.select_action(state)
         # 探索
         if t < args.epsilon_steps:
@@ -303,13 +307,14 @@ def run(args):
         else:
             epsilon = args.expl_noise
 
-        # re-lable rate
+        # re-lable rate todo 这里代码无用
         if t < args.relable_steps:
             relable_rate = args.relable_initial - (args.relable_initial - args.relable_final) * (
                     t / args.relable_steps)
         else:
             relable_rate = args.relable_final
 
+        # 选中的代码确实是在给动作嵌入增加噪音，这是HyAR算法中的探索机制
         discrete_emb = (
                 discrete_emb + np.random.normal(0, max_action * epsilon, size=discrete_emb_dim)
         ).clip(-max_action, max_action)
@@ -317,21 +322,26 @@ def run(args):
                 parameter_emb + np.random.normal(0, max_action * epsilon, size=parameter_emb_dim)
         ).clip(-max_action, max_action)
         # parameter_emb = parameter_emb * c_rate
+        #  这里将预测的连续动作的嵌入范围转换为VAE动作的嵌入范围
+        # 从模型构建那边可以指导，VAE的潜入空间是没有范围限制的
+        # 所以这里也可以说成是将TD3的动作转换未VAE的动作
         true_parameter_emb = true_parameter_action(parameter_emb, c_rate)
 
         # select discrete action
         discrete_action_embedding = copy.deepcopy(discrete_emb)
         discrete_action_embedding = torch.from_numpy(discrete_action_embedding).float().reshape(1, -1)
-        discrete_action = action_rep.select_discrete_action(discrete_action_embedding)
-        discrete_emb_1 = action_rep.get_embedding(discrete_action).cpu().view(-1).data.numpy()
+        discrete_action = action_rep.select_discrete_action(discrete_action_embedding) # 将动作嵌入转换为具体的离散动作
+        discrete_emb_1 = action_rep.get_embedding(discrete_action).cpu().view(-1).data.numpy() # 将预测的离散动作转换为实际的动作嵌入
+        # 这个应该只是单个离散动作对应的连续动作吧，对比simple_move_td3，可以得知，这里命名有问题
         all_parameter_action = action_rep.select_parameter_action(state, true_parameter_emb,
                                                                   discrete_emb_1)
 
         parameter_action = all_parameter_action
-        action = pad_action(discrete_action, parameter_action)
+        action = pad_action(discrete_action, parameter_action) # 组合成最终动作
         episode_reward = 0.
 
-        if cur_step >= args.start_timesteps:
+        if cur_step >= args.start_timesteps: # 只有在达到预设的开始训练步数后，才进行策略网络的训练
+            # 返回值无用，可以直接删除
             discrete_relable_rate, parameter_relable_rate = policy.train(replay_buffer, action_rep, c_rate,
                                                                          recon_s, args.batch_size)
         for i in range(max_steps):
@@ -356,7 +366,7 @@ def run(args):
                                         next_state=next_state,
                                         state_next_state=state_next_state,
                                         reward=reward, done=done)
-
+            # 预测下一个状态的动作，用于后续的动作执行
             next_discrete_emb, next_parameter_emb = policy.select_action(next_state)
             # if t % 100 == 0:
             #     print("策略输出", next_discrete_emb, next_parameter_emb)
@@ -369,11 +379,12 @@ def run(args):
             # next_parameter_emb = next_parameter_emb * c_rate
             true_next_parameter_emb = true_parameter_action(next_parameter_emb, c_rate)
             # select discrete action
+            # 利用训练而来的vae 模型，将动作嵌入转换为具体的离散动作
             next_discrete_action_embedding = copy.deepcopy(next_discrete_emb)
             next_discrete_action_embedding = torch.from_numpy(next_discrete_action_embedding).float().reshape(1, -1)
             next_discrete_action = action_rep.select_discrete_action(next_discrete_action_embedding)
             next_discrete_emb_1 = action_rep.get_embedding(next_discrete_action).cpu().view(-1).data.numpy()
-            # select parameter action
+            # select parameter action 将连续动作的嵌入转换为真实的连续动作
             next_all_parameter_action = action_rep.select_parameter_action(next_state, true_next_parameter_emb,
                                                                            next_discrete_emb_1)
             # if t % 100 == 0:
@@ -381,10 +392,17 @@ def run(args):
             # env.render()
 
             next_parameter_action = next_all_parameter_action
-            next_action = pad_action(next_discrete_action, next_parameter_action)
+            next_action = pad_action(next_discrete_action, next_parameter_action) # 将真实离散和连续动作拼接
+            # discrete_emb=next_discrete_emb： 这里存储的是离散动作嵌入
+            # parameter_emb=next_parameter_emb：这里存储的是连续动作嵌入
+            # action=next_action：这里存储的是具体的动作
+            # discrete_action=next_discrete_action：这里存储的是具体的离散动作
+            # parameter_action=next_parameter_action：这里存储的是具体的连续动作
+            # 冗余代码
             discrete_emb, parameter_emb, action, discrete_action, parameter_action = next_discrete_emb, next_parameter_emb, next_action, next_discrete_action, next_parameter_action
             state = next_state
             if cur_step >= args.start_timesteps:
+                # 在每轮游戏内部也进行策略网络的训练 这里面的训练就可TD3没啥不同了，唯一的区别就是利用VAE重建嵌入，防止嵌入质量差
                 discrete_relable_rate, parameter_relable_rate = policy.train(replay_buffer, action_rep, c_rate,
                                                                              recon_s, args.batch_size)
             # if t % 100 == 0:
@@ -392,6 +410,8 @@ def run(args):
             episode_reward += reward
 
             if total_timesteps % args.eval_freq == 0:
+                # 验证、打印调试信息、保存模型
+                # todo
                 print(
                     '{0:5s} R:{1:.4f} r100:{2:.4f}'.format(str(total_timesteps), total_reward / (t + 1),
                                                            np.array(returns[-100:]).mean()))
@@ -425,6 +445,7 @@ def run(args):
 
         # vae 训练
         if t % internal == 0 and t >= 1000:
+            # 这里还要继续训练vae，防止灾难性遗忘
             # print("表征调整")
             # print("vae train")
             c_rate, recon_s = vae_train(action_rep=action_rep, train_step=1, replay_buffer=replay_buffer_embedding,
@@ -511,12 +532,16 @@ def vae_train(action_rep, train_step, replay_buffer, batch_size, save_dir, vae_s
 
 
 def count_boundary(c_rate):
-    median = (c_rate[0] - c_rate[1]) / 2
-    offset = c_rate[0] - 1 * median
+    median = (c_rate[0] - c_rate[1]) / 2 # 计算中值
+    offset = c_rate[0] - 1 * median # 计算距离中值的偏移量
     return median, offset
 
 
 def true_parameter_action(parameter_action, c_rate):
+    # 参数TD3动作潜入空间的值映射到VAE真实的动作参数范围
+    # 转换公式：
+    # true_param = normalized_param * scale + offset
+    # todo 后续回头看看vae部分c_rate是如何对应的
     parameter_action_ = copy.deepcopy(parameter_action)
     for i in range(len(parameter_action)):
         median, offset = count_boundary(c_rate[i])

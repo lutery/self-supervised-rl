@@ -149,9 +149,9 @@ class TD3(object):
         replay_buffer: 训练经验池
         action_rep: todo
         c_rate: 动作每个维度的范围
-        recon_s_rate todo
+        recon_s_rate：这里传入的vae训练时的重建误差，这里用来判断状态重建的好坏，从而决定是否要重标记连续动作嵌入 todo
         '''
-        recon_s_rate = recon_s_rate * 5.0 # todo
+        recon_s_rate = recon_s_rate * 5.0 # 放大5倍作为阈值
         self.total_it += 1
         # Sample replay buffer 采样 离散 不连续
         # discrete_emb：对应真实离散动作的嵌入向量表示
@@ -170,6 +170,7 @@ class TD3(object):
             discrete_emb_table = discrete_emb_.clamp(-self.max_action, self.max_action) # 离散动作的嵌入表示，规范了范围
             discrete_emb_table_noise = (discrete_emb_ + noise_discrete).clamp(-self.max_action, self.max_action) # 增加了噪音的离散动作的嵌入表示
 
+            # 因为vae训练次数比td3之类的动作预测模型少，所以vae还原的discrete_action_old属于old，而td3还原的discrete_action属于new
             discrete_action_old = action_rep.select_discrete_action(discrete_emb).reshape(-1, 1) # 将嵌入动作向量转换为离散动作的值
             d_new = discrete_action.cpu().numpy() 
             d_old = discrete_action_old
