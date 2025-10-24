@@ -211,7 +211,7 @@ class TD3(object):
             recon_c, recon_s, mean, std = action_rep.vae(state, discrete_emb_table, parameter_action)
             parameter_emb_ = mean + std * torch.randn_like(std) # 重参数化采样潜在空间的值
             for i in range(len(parameter_emb_[0])):
-                # 这个循环是在逐维度处理参数嵌入，将每个维度的值从VAE的分布范围映射回标准化范围
+                # 这个循环是在逐维度处理参数嵌入，将每个维度的值从VAE的分布范围映射到TD3的动作范围
                 # 这里对应于在采样时做的转换
                 '''
                 这是范围标准化的逆变换：
@@ -231,6 +231,7 @@ class TD3(object):
             discrete_emb_ = discrete_emb_.clamp(-self.max_action, self.max_action)
             parameter_emb_ = parameter_emb_.clamp(-self.max_action, self.max_action)
 
+            # 通过以上流程，对于经验池中记录的动作嵌入向量，如果质量较差，就通过实际的动作重新编码得到更准确的嵌入表示，从而提升训练效果
             discrete_emb = discrete_emb_
             parameter_emb = parameter_emb_
 
