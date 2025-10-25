@@ -218,6 +218,7 @@ class TD3(object):
                     输入: VAE分布范围内的参数嵌入值
                     输出: 标准化范围[-1, 1]内的参数嵌入值
                 '''
+                # todo 移除范围转换的推荐在md文档
                 parameter_emb_[:, i:i + 1] = self.true_parameter_emb(parameter_emb_[:, i:i + 1], c_rate, i)
             # print("parameter_emb",parameter_emb)
             # print("parameter_emb_",parameter_emb_)
@@ -298,7 +299,7 @@ class TD3(object):
                 actions, action_params = self.actor(Variable(state))
                 # # 对连续动作参数应用梯度反转
                 action_params = torch.cat((actions, action_params), dim=1)
-                # 根据预测的动作值和边界值调整梯度
+                # 根据预测的动作值和边界值调整梯度 
                 delta_a[:, self.discrete_action_dim:] = self._invert_gradients(
                     delta_a[:, self.discrete_action_dim:].cpu(),
                     action_params[:, self.discrete_action_dim:].cpu(),
@@ -309,6 +310,7 @@ class TD3(object):
                     action_params[:, :self.discrete_action_dim].cpu(),
                     grad_type="actions", inplace=True)
                 # 这段代码的作用是将调整后的梯度应用到Actor网络参数上，详细看md文档
+                # torch.mul是逐元素乘积，同时action_params的范围是-1～1，可以将调整后的提取整合到actor中
                 out = -torch.mul(delta_a, action_params)
                 self.actor.zero_grad()
                 out.backward(torch.ones(out.shape).to(device))

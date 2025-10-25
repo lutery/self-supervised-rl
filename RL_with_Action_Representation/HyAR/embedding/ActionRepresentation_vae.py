@@ -102,6 +102,7 @@ class VAE(nn.Module):
             if clip is not None:
                 z = z.clamp(-clip, clip)
         # 通过环境观察和离散动作的嵌入向量提取特征
+        # 以下和forward中开头流程类似
         v_0 = F.relu(self.d0_0(torch.cat([state, action], 1)))
         v_1 = F.relu(self.d0_1(z)) # decode动作潜在空间值
         v = v_0 * v_1 # 组合两者特征
