@@ -96,7 +96,7 @@ def run(args):
         HOP动作: 10.0 (范围在0-720之间)
         LEAP动作: 400.0 (范围在0-430之间)
         '''
-        initial_params_ = [3., 10., 400.] # todo 这个值是用来做啥的？
+        initial_params_ = [3., 10., 400.] # 这个值是用来做啥的？
         # 这段代码的作用是将Platform环境的初始动作参数从原始范围缩放到[-1, 1]区间
         # 公式：scaled_value = 2 * (value - min) / (max - min) - 1
         for a in range(env.action_space.spaces[0].n):
