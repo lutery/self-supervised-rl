@@ -1,3 +1,8 @@
+'''
+policy输出的是倾向离散动作的嵌入、倾向连续动作的嵌入
+Action_rep 是中输出具体的离散动作、select_parameter_action具体的连续动作 agent_pre.act输出包含具体的离散动作和具体的连续动作和所有的连续动作
+'''
+
 import numpy as np
 import gym
 import gym_platform
